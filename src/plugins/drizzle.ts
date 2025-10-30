@@ -25,7 +25,7 @@ const drizzlePlugin: FastifyPluginAsync = async (fastify, options) => {
     await queryClient`SELECT 1`;
     fastify.log.info("✅ Database connected successfully");
   } catch (error) {
-    fastify.log.error({error}, "❌ Database connection failed");
+    fastify.log.error({ error }, "❌ Database connection failed");
     throw error;
   }
 

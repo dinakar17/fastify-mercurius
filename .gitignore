@@ -53,7 +53,7 @@ coverage/
 *.sqlite3
 
 # Docker
-.dockerignore
+# .dockerignore
 docker-compose.override.yml
 
 # Misc
