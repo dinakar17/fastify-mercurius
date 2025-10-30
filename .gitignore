@@ -60,3 +60,12 @@ docker-compose.override.yml
 .turbo
 .vercel
 .next
+
+
+node_modules
+dist
+.env
+.git
+*.md
+drizzle
+src/generated

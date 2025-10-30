@@ -1,8 +1,8 @@
-import fp from 'fastify-plugin';
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import type { FastifyPluginAsync } from 'fastify';
+import fp from "fastify-plugin";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
+import type { FastifyPluginAsync } from "fastify";
 
-declare module 'fastify' {
+declare module "fastify" {
   interface FastifyInstance {
     supabase: SupabaseClient;
   }
@@ -17,11 +17,11 @@ const supabasePlugin: FastifyPluginAsync = async (fastify, options) => {
     process.env.SUPABASE_ANON_KEY!
   );
 
-  fastify.decorate('supabase', supabase);
+  fastify.decorate("supabase", supabase);
 
   // Authentication hook
-  fastify.addHook('onRequest', async (request, reply) => {
-    const token = request.headers.authorization?.replace('Bearer ', '');
+  fastify.addHook("onRequest", async (request, reply) => {
+    const token = request.headers.authorization?.replace("Bearer ", "");
 
     if (token) {
       const { data, error } = await supabase.auth.getUser(token);
@@ -37,5 +37,5 @@ const supabasePlugin: FastifyPluginAsync = async (fastify, options) => {
 };
 
 export default fp(supabasePlugin, {
-  name: 'supabase',
+  name: "supabase",
 });

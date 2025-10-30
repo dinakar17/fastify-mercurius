@@ -1,61 +1,111 @@
-import { eq, inArray } from 'drizzle-orm';
-import { users, posts } from '../db/schema';
-import type { IResolvers } from 'mercurius';
+import { eq, inArray } from "drizzle-orm";
+import { users, posts } from "../db/schema";
+import type { Resolvers } from "../generated/graphql";
+import { GraphQLError } from "graphql";
 
-// Extend Mercurius context type
-declare module 'mercurius' {
-  interface MercuriusContext {
-    user: any | null;
-  }
-}
-
-export const resolvers: IResolvers = {
+export const resolvers: Resolvers = {
   Query: {
-    users: async (_, __, { app }) => {
-      return await app.db.query.users.findMany();
+    users: async (_, __, { db }) => {
+      return await db.query.users.findMany();
     },
 
-    user: async (_, { id }, { app }) => {
-      return await app.db.query.users.findFirst({
-        where: eq(users.id, parseInt(id)),
+    user: async (_, { id }, { db }) => {
+      const user = await db.query.users.findFirst({
+        where: eq(users.id, parseInt(id as string)),
       });
+
+      if (!user) {
+        throw new GraphQLError("User not found", {
+          extensions: { code: "NOT_FOUND" },
+        });
+      }
+
+      return user;
     },
 
-    posts: async (_, __, { app }) => {
-      return await app.db.query.posts.findMany();
+    posts: async (_, __, { db }) => {
+      return await db.query.posts.findMany();
     },
 
-    post: async (_, { id }, { app }) => {
-      return await app.db.query.posts.findFirst({
-        where: eq(posts.id, parseInt(id)),
+    post: async (_, { id }, { db }) => {
+      const post = await db.query.posts.findFirst({
+        where: eq(posts.id, parseInt(id as string)),
       });
+
+      if (!post) {
+        throw new GraphQLError("Post not found", {
+          extensions: { code: "NOT_FOUND" },
+        });
+      }
+
+      return post;
+    },
+
+    me: async (_, __, { db, user }) => {
+      if (!user) {
+        throw new GraphQLError("Not authenticated", {
+          extensions: { code: "UNAUTHENTICATED" },
+        });
+      }
+
+      const dbUser = await db.query.users.findFirst({
+        where: eq(users.email, user.email!),
+      });
+
+      if (!dbUser) {
+        throw new GraphQLError("User profile not found", {
+          extensions: { code: "NOT_FOUND" },
+        });
+      }
+
+      return dbUser;
     },
   },
 
   Mutation: {
-    createUser: async (_, { email, name }, { app, user, reply }) => {
+    createUser: async (_, { input }, { db, user }) => {
       if (!user) {
-        reply.code(401);
-        throw new Error('Unauthorized');
+        throw new GraphQLError("Not authenticated", {
+          extensions: { code: "UNAUTHENTICATED" },
+        });
       }
 
-      const [newUser] = await app.db
-        .insert(users)
-        .values({ email, name })
-        .returning();
-      return newUser;
+      try {
+        const [newUser] = await db
+          .insert(users)
+          .values({
+            email: input.email,
+            name: input.name,
+          })
+          .returning();
+
+        return newUser;
+      } catch (error: any) {
+        if (error.code === "23505") {
+          throw new GraphQLError("Email already exists", {
+            extensions: { code: "BAD_USER_INPUT" },
+          });
+        }
+        throw error;
+      }
     },
 
-    createPost: async (_, { title, content, userId }, { app, user, reply }) => {
+    createPost: async (_, { input }, { db, user }) => {
       if (!user) {
-        reply.code(401);
-        throw new Error('Unauthorized');
+        throw new GraphQLError("Not authenticated", {
+          extensions: { code: "UNAUTHENTICATED" },
+        });
       }
 
-      const [newPost] = await app.db
+      const [newPost] = await db
         .insert(posts)
-        .values({ title, content, userId: parseInt(userId) })
+        .values({
+          title: input.title,
+          content: input.content,
+          userId: parseInt(input.userId as string),
+        })
         .returning();
+
       return newPost;
     },
   },
