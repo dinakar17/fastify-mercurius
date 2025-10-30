@@ -1,40 +1,295 @@
-type User {
-  id: ID!
-  email: String!
-  name: String!
-  posts: [Post!]!
-  createdAt: String!
+# ===========================
+# ENUMS
+# ===========================
+
+enum AccountType {
+  SAVINGS_ACCOUNT
+  CURRENT_ACCOUNT
+  WALLET
+  CASH
+  CREDIT_CARD
+  BNPL
+  LOAN_LENT
+  LOAN_BORROWED
+  FIXED_DEPOSIT
+  TRADING_DEMAT
 }
 
-type Post {
-  id: ID!
-  title: String!
-  content: String!
-  userId: Int!
-  author: User!
-  createdAt: String!
+enum AccountGroup {
+  PREPAID
+  POSTPAID
+  LOAN
+  INVESTMENT
 }
+
+enum TransactionType {
+  DEBIT
+  CREDIT
+}
+
+enum CategoryType {
+  GENERAL
+  INVESTMENT
+}
+
+enum InvestmentAction {
+  BUY
+  SELL
+  DIVIDEND
+  BONUS
+  SPLIT
+}
+
+enum RecurringFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+  YEARLY
+}
+
+enum TransactionFilterType {
+  credit
+  debit
+  recurring
+  investment
+  transfer
+}
+
+enum TransactionOrderType {
+  new_to_old
+  old_to_new
+  high_to_low
+  low_to_high
+}
+
+# ===========================
+# ACCOUNT TYPES
+# ===========================
+
+type Account {
+  accountId: ID!
+  userId: ID!
+  accountType: AccountType!
+  accountGroup: AccountGroup!
+  accountName: String!
+  accountNumber: String
+  institutionName: String
+  currentBalance: String!
+  balanceUpdatedAt: String!
+  manualBalanceUpdatedAt: String!
+  currency: String
+  creditLimit: String
+  billingCycleDay: Int
+  loanAmount: String
+  interestRate: String
+  loanStartDate: String
+  loanEndDate: String
+  logoUrl: String
+  notes: String
+  isActive: Boolean!
+  isDefault: Boolean!
+  createdAt: String!
+  updatedAt: String!
+  lastTransactionDate: String
+  
+  # Related data
+  transactions: [Transaction!]!
+}
+
+# ===========================
+# CATEGORY TYPES
+# ===========================
+
+type Category {
+  categoryId: ID!
+  categoryName: String!
+  categoryNumber: Int!
+  categoryType: CategoryType!
+  investmentSector: String
+  iconUrl: String
+  createdAt: String!
+  updatedAt: String!
+  
+  # Related data
+  transactions: [Transaction!]!
+}
+
+type CustomTransactionName {
+  customNameId: ID!
+  userId: ID!
+  customName: String!
+  logoUrl: String
+  createdAt: String!
+  updatedAt: String!
+}
+
+# ===========================
+# TRANSACTION TYPES
+# ===========================
+
+type Transaction {
+  transactionId: ID!
+  accountId: ID!
+  amount: String!
+  currency: String
+  transactionType: TransactionType!
+  transactionDateTime: String!
+  description: String
+  location: String
+  paymentMethod: String
+  attachments: String # JSON string
+  
+  # Investment fields
+  isInvestment: Boolean!
+  assetSymbol: String
+  quantity: String
+  pricePerUnit: String
+  investmentAction: InvestmentAction
+  feesCharges: String
+  
+  # Recurring fields
+  isRecurring: Boolean!
+  recurringFrequency: RecurringFrequency
+  recurringPatternName: String
+  
+  # Transfer fields
+  isTransfer: Boolean!
+  linkedTransactionId: ID
+  
+  # Timestamps
+  createdAt: String!
+  updatedAt: String!
+  
+  # Related data (from joins)
+  accountName: String
+  accountNumber: String
+  accountLogoUrl: String
+  categoryId: ID
+  categoryName: String
+  categoryNumber: Int
+  categoryType: CategoryType
+  investmentSector: String
+  categoryIconUrl: String
+  customNameId: ID
+  customNameText: String
+  customLogoUrl: String
+  
+  # Related entities (resolved by loaders)
+  account: Account!
+  category: Category
+  customName: CustomTransactionName
+  linkedTransaction: Transaction
+}
+
+# ===========================
+# INPUT TYPES
+# ===========================
+
+input CreateAccountInput {
+  accountType: AccountType!
+  accountName: String!
+  accountNumber: String
+  institutionName: String
+  logoUrl: String
+  accountGroup: AccountGroup!
+  initialBalance: String
+  creditLimit: String
+}
+
+input UpdateAccountInput {
+  accountName: String
+  accountNumber: String
+  institutionName: String
+  logoUrl: String
+  currentBalance: String
+  isActive: Boolean
+  isDefault: Boolean
+}
+
+input CreateTransactionInput {
+  accountId: ID!
+  categoryNumber: Int!
+  amount: String!
+  transactionType: TransactionType!
+  transactionDateTime: String!
+  customName: String
+  description: String
+  
+  # Investment Related
+  isInvestment: Boolean
+  assetSymbol: String
+  pricePerUnit: String
+  quantity: String
+  investmentAction: InvestmentAction
+  
+  # Transfer Related
+  isTransfer: Boolean
+  otherAccountId: ID
+  
+  # Recurring Related
+  isRecurring: Boolean
+  recurringFrequency: RecurringFrequency
+  recurringPatternName: String
+  
+  # Other Optional Settings
+  location: String
+  paymentMethod: String
+}
+
+input UpdateTransactionInput {
+  amount: String
+  description: String
+  categoryNumber: Int
+  customName: String
+  customNameLogoUrl: String
+}
+
+input GetTransactionsInput {
+  limit: Int
+  accountId: [ID!] # Support multiple account IDs
+  customNameId: ID
+  categoryId: ID
+  order: TransactionOrderType
+  type: TransactionFilterType
+  month: String # Format: "YYYY-MM"
+}
+
+# ===========================
+# RESPONSE TYPES
+# ===========================
+
+type DeleteResponse {
+  success: Boolean!
+  accountId: ID
+  transactionId: ID
+}
+
+# ===========================
+# QUERIES
+# ===========================
 
 type Query {
-  users: [User!]!
-  user(id: ID!): User
-  posts: [Post!]!
-  post(id: ID!): Post
-  me: User
+  # Account queries
+  getMyAccounts: [Account!]!
+  getAccount(accountId: ID!): Account!
+  
+  # Transaction queries
+  getMyTransactions(options: GetTransactionsInput): [Transaction!]!
+  getMyTransaction(transactionId: ID!): Transaction!
 }
 
-input CreateUserInput {
-  email: String!
-  name: String!
-}
-
-input CreatePostInput {
-  title: String!
-  content: String!
-  userId: ID!
-}
+# ===========================
+# MUTATIONS
+# ===========================
 
 type Mutation {
-  createUser(input: CreateUserInput!): User!
-  createPost(input: CreatePostInput!): Post!
+  # Account mutations
+  createAccount(input: CreateAccountInput!): Account!  
+  updateAccount(accountId: ID!, input: UpdateAccountInput!): Account!
+  deleteAccount(accountId: ID!): DeleteResponse!
+  
+  # Transaction mutations
+  createTransaction(input: CreateTransactionInput!): Transaction!
+  updateTransaction(transactionId: ID!, input: UpdateTransactionInput!): Transaction!
+  deleteTransaction(transactionId: ID!): DeleteResponse!
 }

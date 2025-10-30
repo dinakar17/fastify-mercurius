@@ -9,8 +9,14 @@ const config: CodegenConfig = {
       config: {
         contextType: "../types#MercuriusContext",
         mappers: {
-          User: "../db/schema#DbUser",
-          Post: "../db/schema#DbPost",
+          DbAccount: "../db/schema#DbAccount",
+          NewAccount: "../db/schema#InsertAccount",
+          DbCategory: "../db/schema#DbCategory",
+          NewCategory: "../db/schema#InsertCategory",
+          DbCustomTransactionName: "../db/schema#DbCustomTransactionName",
+          NewCustomTransactionName: "../db/schema#InsertCustomTransactionName",
+          DbTransaction: "../db/schema#DbTransaction",
+          NewTransaction: "../db/schema#InsertTransaction",
         },
         useIndexSignature: true,
         enumsAsTypes: true,

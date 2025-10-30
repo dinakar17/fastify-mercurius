@@ -1,0 +1,15 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "extends": ["ultracite/core"],
+  "files": {
+    "includes": ["!src/db/index.ts", "!src/plugins/drizzle.ts"]
+  },
+  "linter": {
+    "rules": {
+      "suspicious": {
+        "noExplicitAny": "warn",
+        "noConsole": "off"
+      }
+    }
+  }
+}

@@ -1,72 +1,74 @@
 import type { FastifyPluginAsync } from "fastify";
-import { eq } from "drizzle-orm";
-import { users } from "../db/schema";
 
-const usersRoute: FastifyPluginAsync = async (fastify, options) => {
+// HTTP Status Codes
+const HTTP_NOT_FOUND = 404;
+const HTTP_BAD_REQUEST = 400;
+const HTTP_CREATED = 201;
+
+// Sample user data
+const sampleUsers = [
+  {
+    id: 1,
+    email: "alice@example.com",
+    name: "Alice Johnson",
+    createdAt: new Date("2024-01-15"),
+  },
+  {
+    id: 2,
+    email: "bob@example.com",
+    name: "Bob Smith",
+    createdAt: new Date("2024-02-20"),
+  },
+  {
+    id: 3,
+    email: "charlie@example.com",
+    name: "Charlie Davis",
+    createdAt: new Date("2024-03-10"),
+  },
+];
+
+const usersRoute: FastifyPluginAsync = async (fastify) => {
   // GET /api/users - Get all users
-  fastify.get("/", async (request, reply) => {
-    try {
-      const allUsers = await fastify.db.query.users.findMany();
-      return { success: true, data: allUsers };
-    } catch (error: any) {
-      reply.status(500);
-      return { success: false, error: error.message };
-    }
-  });
+  await fastify.get("/", () => ({ success: true, data: sampleUsers }));
 
   // GET /api/users/:id - Get user by ID
-  fastify.get<{ Params: { id: string } }>("/:id", async (request, reply) => {
-    try {
-      const user = await fastify.db.query.users.findFirst({
-        where: eq(users.id, parseInt(request.params.id)),
-        with: { posts: true },
-      });
+  await fastify.get<{ Params: { id: string } }>("/:id", (request, reply) => {
+    const userId = Number.parseInt(request.params.id, 10);
+    const user = sampleUsers.find((u) => u.id === userId);
 
-      if (!user) {
-        reply.status(404);
-        return { success: false, error: "User not found" };
-      }
-
-      return { success: true, data: user };
-    } catch (error: any) {
-      reply.status(500);
-      return { success: false, error: error.message };
+    if (!user) {
+      reply.status(HTTP_NOT_FOUND);
+      return { success: false, error: "User not found" };
     }
+
+    return { success: true, data: user };
   });
 
   // POST /api/users - Create user
-  fastify.post<{
+  await fastify.post<{
     Body: { email: string; name: string };
-  }>("/", async (request, reply) => {
-    try {
-      const { email, name } = request.body;
+  }>("/", (request, reply) => {
+    const { email, name } = request.body;
 
-      if (!email || !name) {
-        reply.status(400);
-        return {
-          success: false,
-          error: "Email and name are required",
-        };
-      }
-
-      const [newUser] = await fastify.db
-        .insert(users)
-        .values({ email, name })
-        .returning();
-
-      reply.status(201);
-      return { success: true, data: newUser };
-    } catch (error: any) {
-      if (error.code === "23505") {
-        reply.status(409);
-        return {
-          success: false,
-          error: "Email already exists",
-        };
-      }
-      reply.status(500);
-      return { success: false, error: error.message };
+    if (!(email && name)) {
+      reply.status(HTTP_BAD_REQUEST);
+      return {
+        success: false,
+        error: "Email and name are required",
+      };
     }
+
+    const newUser = {
+      id: sampleUsers.length + 1,
+      email,
+      name,
+      createdAt: new Date(),
+    };
+
+    sampleUsers.push(newUser);
+
+    reply.status(HTTP_CREATED);
+    return { success: true, data: newUser };
   });
 };
 

@@ -5,8 +5,43 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1761818676944,
-      "tag": "0000_familiar_talos",
+      "when": 1761600280960,
+      "tag": "0000_abandoned_starjammers",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1761688693905,
+      "tag": "0001_robust_the_executioner",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1761691795831,
+      "tag": "0002_condemned_radioactive_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1761735902637,
+      "tag": "0003_brave_marrow",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1761743263427,
+      "tag": "0004_glorious_vulture",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1761749851455,
+      "tag": "0005_lush_reavers",
       "breakpoints": true
     }
   ]
