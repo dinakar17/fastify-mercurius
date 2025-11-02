@@ -7,6 +7,7 @@ import { loaders } from "./graphql/loaders";
 import { resolvers } from "./graphql/resolvers";
 import drizzlePlugin from "./plugins/drizzle";
 import supabasePlugin from "./plugins/supabase";
+import aiRoute from "./routes/ai";
 import usersRoute from "./routes/users";
 import type { MercuriusContext } from "./types";
 
@@ -19,7 +20,7 @@ async function startServer() {
           target: "pino-pretty",
           options: {
             colorize: true,
-            translateTime: "HH:MM:ss Z",
+            translateTime: "SYS:HH:MM:ss.l o",
             ignore: "pid,hostname",
           },
         },
@@ -44,6 +45,7 @@ async function startServer() {
 
   // Register REST routes
   await fastify.register(usersRoute, { prefix: "/api/users" });
+  await fastify.register(aiRoute, { prefix: "/api/ai" });
 
   // Read GraphQL schema
   const schema = readFileSync("./src/graphql/schema.graphql", "utf-8");
@@ -66,6 +68,22 @@ async function startServer() {
     }),
   });
 
+  // Add logging hook for GraphQL operations
+  fastify.graphql.addHook("preExecution", (_schema, document) => {
+    const operation = document.definitions.find(
+      (def) => def.kind === "OperationDefinition"
+    );
+
+    if (operation && operation.kind === "OperationDefinition") {
+      const operationType = operation.operation;
+      const operationName = operation.name?.value || "Anonymous";
+
+      fastify.log.info(
+        `📝 GraphQL ${operationType.toUpperCase()}: ${operationName}`
+      );
+    }
+  });
+
   try {
     const port = Number.parseInt(process.env.PORT || "4000", 10);
     await fastify.listen({ port, host: "0.0.0.0" });
@@ -73,6 +91,7 @@ async function startServer() {
     fastify.log.info(`🚀 Server ready at http://localhost:${port}`);
     fastify.log.info(`📊 GraphQL endpoint: http://localhost:${port}/graphql`);
     fastify.log.info(`🔗 REST API: http://localhost:${port}/api/users`);
+    fastify.log.info(`🤖 AI Stream API: http://localhost:${port}/api/ai`);
   } catch (err) {
     fastify.log.error(err);
     process.exit(1);

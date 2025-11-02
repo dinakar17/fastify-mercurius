@@ -9,6 +9,9 @@
       "suspicious": {
         "noExplicitAny": "warn",
         "noConsole": "off"
+      },
+      "complexity": {
+        "noExcessiveCognitiveComplexity": "warn"
       }
     }
   }

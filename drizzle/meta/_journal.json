@@ -43,6 +43,13 @@
       "when": 1761749851455,
       "tag": "0005_lush_reavers",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1762116292997,
+      "tag": "0006_eager_gauntlet",
+      "breakpoints": true
     }
   ]
 }

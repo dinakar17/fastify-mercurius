@@ -8,35 +8,6 @@ import {
 } from "../db/schema";
 
 export const loaders: MercuriusLoaders = {
-  Account: {
-    async transactions(queries, { app }) {
-      const accountIds = queries.map(({ obj }) => obj.accountId);
-
-      const allTransactions = await app.db.query.transactions.findMany({
-        where: inArray(transactions.accountId, accountIds),
-        orderBy: (table, { desc }) => [desc(table.transactionDateTime)],
-      });
-
-      const transactionsByAccountId = new Map<
-        string,
-        (typeof transactions.$inferSelect)[]
-      >();
-      for (const transaction of allTransactions) {
-        if (!transactionsByAccountId.has(transaction.accountId)) {
-          transactionsByAccountId.set(transaction.accountId, []);
-        }
-        const accountTransactions = transactionsByAccountId.get(
-          transaction.accountId
-        );
-        if (accountTransactions) {
-          accountTransactions.push(transaction);
-        }
-      }
-
-      return accountIds.map((id) => transactionsByAccountId.get(id) ?? []);
-    },
-  },
-
   Transaction: {
     async account(queries, { app }) {
       const accountIds = queries.map(({ obj }) => obj.accountId);
@@ -134,35 +105,6 @@ export const loaders: MercuriusLoaders = {
           ? (linkedTransactionsById.get(obj.linkedTransactionId) ?? null)
           : null
       );
-    },
-  },
-
-  Category: {
-    async transactions(queries, { app }) {
-      const categoryIds = queries.map(({ obj }) => obj.categoryId);
-
-      const allTransactions = await app.db.query.transactions.findMany({
-        where: inArray(transactions.categoryId, categoryIds),
-        orderBy: (table, { desc }) => [desc(table.transactionDateTime)],
-      });
-
-      const transactionsByCategoryId = new Map<
-        string,
-        (typeof transactions.$inferSelect)[]
-      >();
-      for (const transaction of allTransactions) {
-        if (!transactionsByCategoryId.has(transaction.categoryId)) {
-          transactionsByCategoryId.set(transaction.categoryId, []);
-        }
-        const categoryTransactions = transactionsByCategoryId.get(
-          transaction.categoryId
-        );
-        if (categoryTransactions) {
-          categoryTransactions.push(transaction);
-        }
-      }
-
-      return categoryIds.map((id) => transactionsByCategoryId.get(id) ?? []);
     },
   },
 };

@@ -1,0 +1,862 @@
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  gt,
+  gte,
+  ilike,
+  inArray,
+  lt,
+  lte,
+  or,
+  type SQL,
+  sql,
+} from "drizzle-orm";
+import { GraphQLError } from "graphql";
+import { MAX_TRANSACTION_LIMIT } from "../config/constants";
+import {
+  accounts,
+  categories,
+  customTransactionNames,
+  investmentHoldings,
+  transactions,
+} from "../db/schema";
+import type {
+  Account,
+  InvestmentHolding,
+  QueryResolvers,
+  Transaction,
+} from "../generated/graphql";
+import { recurringQueries } from "./recurring-queries";
+import {
+  aggregateByAccount,
+  aggregateByCategory,
+  aggregateByCustomName,
+  aggregateWithoutGrouping,
+  getPrepaidAccountIds,
+} from "./totals-helpers";
+
+const DEFAULT_TRANSACTION_LIMIT = 50;
+
+// Helper function to format transaction for GraphQL
+const formatTransactionForGraphQL = (
+  transaction: typeof transactions.$inferSelect,
+  joinedData?: {
+    accountName?: string | null;
+    accountNumber?: string | null;
+    accountLogoUrl?: string | null;
+    categoryId?: string | null;
+    categoryName?: string | null;
+    categoryNumber?: number | null;
+    categoryType?: (typeof categories.$inferSelect)["categoryType"] | null;
+    investmentSector?: string | null;
+    categoryIconUrl?: string | null;
+    customNameId?: string | null;
+    customName?: string | null;
+    customLogoUrl?: string | null;
+  }
+) => ({
+  transactionId: transaction.transactionId,
+  accountId: transaction.accountId,
+  amount: transaction.amount,
+  currency: transaction.currency,
+  transactionType: transaction.transactionType,
+  transactionDateTime: transaction.transactionDateTime.toISOString(),
+  description: transaction.description,
+  location: transaction.location,
+  paymentMethod: transaction.paymentMethod,
+  attachments: transaction.attachments
+    ? JSON.stringify(transaction.attachments)
+    : null,
+
+  // Investment fields
+  isInvestment: transaction.isInvestment,
+  assetSymbol: transaction.assetSymbol,
+  quantity: transaction.quantity,
+  pricePerUnit: transaction.pricePerUnit,
+  investmentAction: transaction.investmentAction,
+  feesCharges: transaction.feesCharges,
+
+  // Recurring fields
+  isRecurring: transaction.isRecurring,
+  recurringFrequency: transaction.recurringFrequency,
+  recurringPatternName: transaction.recurringPatternName,
+
+  // Transfer fields
+  isTransfer: transaction.isTransfer,
+  linkedTransactionId: transaction.linkedTransactionId,
+
+  // Timestamps
+  createdAt: transaction.createdAt.toISOString(),
+  updatedAt: transaction.updatedAt.toISOString(),
+
+  // Joined data
+  accountName: joinedData?.accountName ?? null,
+  accountNumber: joinedData?.accountNumber ?? null,
+  accountLogoUrl: joinedData?.accountLogoUrl ?? null,
+  categoryId: joinedData?.categoryId ?? null,
+  categoryName: joinedData?.categoryName ?? null,
+  categoryNumber: joinedData?.categoryNumber ?? null,
+  categoryType: joinedData?.categoryType ?? null,
+  investmentSector: joinedData?.investmentSector ?? null,
+  categoryIconUrl: joinedData?.categoryIconUrl ?? null,
+  customNameId: joinedData?.customNameId ?? null,
+  customNameText: joinedData?.customName ?? null,
+  customLogoUrl: joinedData?.customLogoUrl ?? null,
+});
+
+// Helper function to add type filter conditions
+const addTypeFilter = (
+  conditions: SQL[],
+  type: "credit" | "debit" | "recurring" | "investment" | "transfer"
+): void => {
+  if (type === "credit") {
+    conditions.push(eq(transactions.transactionType, "CREDIT"));
+  } else if (type === "debit") {
+    conditions.push(eq(transactions.transactionType, "DEBIT"));
+  } else if (type === "recurring") {
+    conditions.push(eq(transactions.isRecurring, true));
+  } else if (type === "investment") {
+    conditions.push(eq(transactions.isInvestment, true));
+  } else if (type === "transfer") {
+    conditions.push(eq(transactions.isTransfer, true));
+  }
+};
+
+// Helper function to add account filter
+const addAccountFilter = (
+  conditions: SQL[],
+  accountId: string | string[]
+): void => {
+  if (Array.isArray(accountId)) {
+    if (accountId.length > 0) {
+      conditions.push(inArray(transactions.accountId, accountId));
+    }
+  } else {
+    conditions.push(eq(transactions.accountId, accountId));
+  }
+};
+
+// Helper function to add month filter
+const addMonthFilter = (conditions: SQL[], month: string): void => {
+  const [year, monthNum] = month.split("-").map(Number);
+  const minMonth = 1;
+  const maxMonth = 12;
+  const lastDayOfMonth = 0;
+  const lastHour = 23;
+  const lastMinute = 59;
+  const lastSecond = 59;
+  const lastMillisecond = 999;
+
+  if (year && monthNum >= minMonth && monthNum <= maxMonth) {
+    const startDate = new Date(year, monthNum - 1, 1);
+    const endDate = new Date(
+      year,
+      monthNum,
+      lastDayOfMonth,
+      lastHour,
+      lastMinute,
+      lastSecond,
+      lastMillisecond
+    );
+
+    conditions.push(
+      gte(transactions.transactionDateTime, startDate),
+      lte(transactions.transactionDateTime, endDate)
+    );
+  }
+};
+
+// Helper function to add search filter
+const addSearchFilter = (conditions: SQL[], search: string): void => {
+  const searchPattern = `%${search}%`;
+  const searchConditions: SQL[] = [];
+
+  // Search in description
+  searchConditions.push(ilike(transactions.description, searchPattern));
+
+  // Search in custom name (only if joined)
+  searchConditions.push(
+    ilike(customTransactionNames.customName, searchPattern)
+  );
+
+  const searchOr = or(...searchConditions);
+  if (searchOr) {
+    conditions.push(searchOr);
+  }
+};
+
+// Helper function to add amount range filter
+const addAmountRangeFilter = (
+  conditions: SQL[],
+  amountRange: { min?: string | null; max?: string | null }
+): void => {
+  if (amountRange.min) {
+    conditions.push(gte(transactions.amount, amountRange.min));
+  }
+  if (amountRange.max) {
+    conditions.push(lte(transactions.amount, amountRange.max));
+  }
+};
+
+// Helper function to add cursor-based pagination filter
+const addCursorFilter = (
+  conditions: SQL[],
+  cursor: string,
+  order: "new_to_old" | "old_to_new" | "high_to_low" | "low_to_high"
+): void => {
+  if (order === "new_to_old") {
+    // For descending date order, get transactions older than cursor
+    conditions.push(
+      lt(
+        transactions.transactionDateTime,
+        sql`(SELECT transaction_date_time FROM transactions WHERE transaction_id = ${cursor})`
+      )
+    );
+  } else if (order === "old_to_new") {
+    // For ascending date order, get transactions newer than cursor
+    conditions.push(
+      gt(
+        transactions.transactionDateTime,
+        sql`(SELECT transaction_date_time FROM transactions WHERE transaction_id = ${cursor})`
+      )
+    );
+  } else if (order === "high_to_low") {
+    // For descending amount order, get transactions with lower amounts OR same amount but older
+    const cursorAmountSubquery = sql`(SELECT amount FROM transactions WHERE transaction_id = ${cursor})`;
+    const cursorDateSubquery = sql`(SELECT transaction_date_time FROM transactions WHERE transaction_id = ${cursor})`;
+
+    const orCondition = or(
+      lt(transactions.amount, cursorAmountSubquery),
+      and(
+        eq(transactions.amount, cursorAmountSubquery),
+        lt(transactions.transactionDateTime, cursorDateSubquery)
+      )
+    );
+    if (orCondition) {
+      conditions.push(orCondition);
+    }
+  } else if (order === "low_to_high") {
+    // For ascending amount order, get transactions with higher amounts OR same amount but newer
+    const cursorAmountSubquery = sql`(SELECT amount FROM transactions WHERE transaction_id = ${cursor})`;
+    const cursorDateSubquery = sql`(SELECT transaction_date_time FROM transactions WHERE transaction_id = ${cursor})`;
+
+    const orCondition = or(
+      gt(transactions.amount, cursorAmountSubquery),
+      and(
+        eq(transactions.amount, cursorAmountSubquery),
+        gt(transactions.transactionDateTime, cursorDateSubquery)
+      )
+    );
+    if (orCondition) {
+      conditions.push(orCondition);
+    }
+  }
+};
+
+// Helper function to get order by clause
+const getOrderByClause = (
+  order: "new_to_old" | "old_to_new" | "high_to_low" | "low_to_high"
+): ReturnType<typeof desc | typeof asc> => {
+  if (order === "old_to_new") {
+    return asc(transactions.transactionDateTime);
+  }
+  if (order === "high_to_low") {
+    return desc(transactions.amount);
+  }
+  if (order === "low_to_high") {
+    return asc(transactions.amount);
+  }
+  // new_to_old (default)
+  return desc(transactions.transactionDateTime);
+};
+
+// Helper function to build all filter conditions
+const buildFilterConditions = (
+  userId: string,
+  options: {
+    accountId?: string | string[] | null;
+    categoryNumber?: number | null;
+    customNameId?: string | null;
+    type?: "credit" | "debit" | "recurring" | "investment" | "transfer" | null;
+    month?: string | null;
+    search?: string | null;
+    amountRange?: { min?: string | null; max?: string | null } | null;
+    cursor?: string | null;
+    order?: "new_to_old" | "old_to_new" | "high_to_low" | "low_to_high" | null;
+    isInvestment?: boolean | null;
+    isRecurring?: boolean | null;
+    isTransfer?: boolean | null;
+    startDate?: string | null;
+    endDate?: string | null;
+    assetSymbol?: string | null;
+    investmentAction?: string | null;
+    recurringFrequency?: string | null;
+    location?: string | null;
+    paymentMethod?: string | null;
+  }
+): SQL[] => {
+  const conditions: SQL[] = [eq(transactions.userId, userId)];
+
+  if (options.accountId) {
+    addAccountFilter(conditions, options.accountId);
+  }
+
+  if (options.categoryNumber !== undefined && options.categoryNumber !== null) {
+    conditions.push(eq(categories.categoryNumber, options.categoryNumber));
+  }
+
+  if (options.customNameId) {
+    conditions.push(eq(transactions.customNameId, options.customNameId));
+  }
+
+  if (options.type) {
+    addTypeFilter(conditions, options.type);
+  }
+
+  if (options.month) {
+    addMonthFilter(conditions, options.month);
+  }
+
+  if (options.search) {
+    addSearchFilter(conditions, options.search);
+  }
+
+  if (options.amountRange) {
+    addAmountRangeFilter(conditions, options.amountRange);
+  }
+
+  if (options.cursor) {
+    addCursorFilter(conditions, options.cursor, options.order || "new_to_old");
+  }
+
+  // Apply additional filters
+  applyAdditionalFilters(conditions, options);
+
+  return conditions;
+};
+
+// Helper function to apply additional filters
+const applyAdditionalFilters = (
+  conditions: SQL[],
+  options: {
+    isInvestment?: boolean | null;
+    isRecurring?: boolean | null;
+    isTransfer?: boolean | null;
+    startDate?: string | null;
+    endDate?: string | null;
+    assetSymbol?: string | null;
+    investmentAction?: string | null;
+    recurringFrequency?: string | null;
+    location?: string | null;
+    paymentMethod?: string | null;
+  }
+): void => {
+  // Boolean filters
+  if (options.isInvestment !== undefined && options.isInvestment !== null) {
+    conditions.push(eq(transactions.isInvestment, options.isInvestment));
+  }
+
+  if (options.isRecurring !== undefined && options.isRecurring !== null) {
+    conditions.push(eq(transactions.isRecurring, options.isRecurring));
+  }
+
+  if (options.isTransfer !== undefined && options.isTransfer !== null) {
+    conditions.push(eq(transactions.isTransfer, options.isTransfer));
+  }
+
+  // Date range filters
+  if (options.startDate) {
+    conditions.push(
+      gte(transactions.transactionDateTime, new Date(options.startDate))
+    );
+  }
+
+  if (options.endDate) {
+    conditions.push(
+      lte(transactions.transactionDateTime, new Date(options.endDate))
+    );
+  }
+
+  // Investment-specific filters
+  if (options.assetSymbol) {
+    conditions.push(eq(transactions.assetSymbol, options.assetSymbol));
+  }
+
+  if (options.investmentAction) {
+    conditions.push(
+      eq(
+        transactions.investmentAction,
+        options.investmentAction as
+          | "BUY"
+          | "SELL"
+          | "DIVIDEND"
+          | "BONUS"
+          | "SPLIT"
+      )
+    );
+  }
+
+  // Recurring-specific filters
+  if (options.recurringFrequency) {
+    conditions.push(
+      eq(
+        transactions.recurringFrequency,
+        options.recurringFrequency as "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY"
+      )
+    );
+  }
+
+  // Additional filters
+  if (options.location) {
+    conditions.push(ilike(transactions.location, `%${options.location}%`));
+  }
+
+  if (options.paymentMethod) {
+    conditions.push(
+      ilike(transactions.paymentMethod, `%${options.paymentMethod}%`)
+    );
+  }
+};
+
+export const queries: QueryResolvers = {
+  // Get all accounts for authenticated user
+  getMyAccounts: async (_, __, { db, user }) => {
+    if (!user) {
+      throw new GraphQLError("Not authenticated", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const result = await db
+      .select()
+      .from(accounts)
+      .where(eq(accounts.userId, user.id))
+      .orderBy(desc(accounts.createdAt));
+
+    return result.map((account) => ({
+      ...account,
+      balanceUpdatedAt: account.balanceUpdatedAt.toISOString(),
+      manualBalanceUpdatedAt: account.manualBalanceUpdatedAt.toISOString(),
+      loanStartDate: account.loanStartDate?.toISOString() ?? null,
+      loanEndDate: account.loanEndDate?.toISOString() ?? null,
+      createdAt: account.createdAt.toISOString(),
+      updatedAt: account.updatedAt.toISOString(),
+      lastTransactionDate: account.balanceUpdatedAt
+        ? account.balanceUpdatedAt.toISOString()
+        : null,
+    })) as unknown as Account[];
+  },
+
+  // Get specific account by ID
+  getAccount: async (_, { accountId }, { db, user }) => {
+    if (!user) {
+      throw new GraphQLError("Not authenticated", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const result = await db
+      .select()
+      .from(accounts)
+      .where(
+        and(eq(accounts.accountId, accountId), eq(accounts.userId, user.id))
+      )
+      .limit(1);
+
+    if (!result[0]) {
+      throw new GraphQLError("Account not found", {
+        extensions: { code: "NOT_FOUND" },
+      });
+    }
+
+    const account = result[0];
+    return {
+      ...account,
+      balanceUpdatedAt: account.balanceUpdatedAt.toISOString(),
+      manualBalanceUpdatedAt: account.manualBalanceUpdatedAt.toISOString(),
+      loanStartDate: account.loanStartDate?.toISOString() ?? null,
+      loanEndDate: account.loanEndDate?.toISOString() ?? null,
+      createdAt: account.createdAt.toISOString(),
+      updatedAt: account.updatedAt.toISOString(),
+      lastTransactionDate: account.balanceUpdatedAt
+        ? account.balanceUpdatedAt.toISOString()
+        : null,
+    } as unknown as Account;
+  },
+
+  // Get transactions for authenticated user
+  getMyTransactions: async (_, { options }, { db, user }) => {
+    if (!user) {
+      throw new GraphQLError("Not authenticated", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const {
+      limit = 50,
+      cursor,
+      accountId,
+      customNameId,
+      categoryNumber,
+      order = "new_to_old",
+      type,
+      month,
+      search,
+      amountRange,
+      isInvestment,
+      isRecurring,
+      isTransfer,
+      startDate,
+      endDate,
+      assetSymbol,
+      investmentAction,
+      recurringFrequency,
+      location,
+      paymentMethod,
+    } = options ?? {};
+
+    // Build all filter conditions
+    const conditions = buildFilterConditions(user.id, {
+      accountId,
+      categoryNumber,
+      customNameId,
+      type,
+      month,
+      search,
+      amountRange,
+      cursor,
+      order,
+      isInvestment,
+      isRecurring,
+      isTransfer,
+      startDate,
+      endDate,
+      assetSymbol,
+      investmentAction,
+      recurringFrequency,
+      location,
+      paymentMethod,
+    });
+
+    const orderByClause = getOrderByClause(order || "new_to_old");
+
+    // Fetch one extra to determine if there's a next page
+    const pageSize = Math.min(
+      limit || DEFAULT_TRANSACTION_LIMIT,
+      MAX_TRANSACTION_LIMIT
+    );
+
+    const result = await db
+      .select()
+      .from(transactions)
+      .leftJoin(accounts, eq(transactions.accountId, accounts.accountId))
+      .leftJoin(categories, eq(transactions.categoryId, categories.categoryId))
+      .leftJoin(
+        customTransactionNames,
+        eq(transactions.customNameId, customTransactionNames.customNameId)
+      )
+      .where(and(...conditions))
+      .orderBy(orderByClause)
+      .limit(pageSize + 1);
+
+    // Determine if there's a next page
+    const hasNextPage = result.length > pageSize;
+    const transactionsData = hasNextPage ? result.slice(0, pageSize) : result;
+
+    const formattedTransactions = transactionsData.map((row) =>
+      formatTransactionForGraphQL(row.transactions, {
+        accountName: row.accounts?.accountName ?? null,
+        accountNumber: row.accounts?.accountNumber ?? null,
+        accountLogoUrl: row.accounts?.logoUrl ?? null,
+        categoryId: row.categories?.categoryId ?? null,
+        categoryName: row.categories?.categoryName ?? null,
+        categoryNumber: row.categories?.categoryNumber ?? null,
+        categoryType: row.categories?.categoryType ?? null,
+        investmentSector: row.categories?.investmentSector ?? null,
+        categoryIconUrl: row.categories?.defaultIconUrl ?? null,
+        customNameId: row.custom_transaction_names?.customNameId ?? null,
+        customName: row.custom_transaction_names?.customName ?? null,
+        customLogoUrl: row.custom_transaction_names?.customLogoUrl ?? null,
+      })
+    );
+
+    // Get the last transaction's ID as the cursor
+    const endCursor =
+      transactionsData.length > 0
+        ? (transactionsData.at(-1)?.transactions.transactionId ?? null)
+        : null;
+
+    return {
+      transactions: formattedTransactions as unknown as Transaction[],
+      pageInfo: {
+        hasNextPage,
+        endCursor,
+      },
+    };
+  },
+
+  // Get single transaction by ID
+  getMyTransaction: async (_, { transactionId }, { db, user }) => {
+    if (!user) {
+      throw new GraphQLError("Not authenticated", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const result = await db
+      .select()
+      .from(transactions)
+      .leftJoin(accounts, eq(transactions.accountId, accounts.accountId))
+      .leftJoin(categories, eq(transactions.categoryId, categories.categoryId))
+      .leftJoin(
+        customTransactionNames,
+        eq(transactions.customNameId, customTransactionNames.customNameId)
+      )
+      .where(
+        and(
+          eq(transactions.transactionId, transactionId),
+          eq(transactions.userId, user.id)
+        )
+      )
+      .limit(1);
+
+    if (!result[0]) {
+      throw new GraphQLError("Transaction not found", {
+        extensions: { code: "NOT_FOUND" },
+      });
+    }
+
+    const row = result[0];
+
+    return formatTransactionForGraphQL(row.transactions, {
+      accountName: row.accounts?.accountName ?? null,
+      accountNumber: row.accounts?.accountNumber ?? null,
+      accountLogoUrl: row.accounts?.logoUrl ?? null,
+      categoryId: row.categories?.categoryId ?? null,
+      categoryName: row.categories?.categoryName ?? null,
+      categoryNumber: row.categories?.categoryNumber ?? null,
+      categoryType: row.categories?.categoryType ?? null,
+      investmentSector: row.categories?.investmentSector ?? null,
+      categoryIconUrl: row.categories?.defaultIconUrl ?? null,
+      customNameId: row.custom_transaction_names?.customNameId ?? null,
+      customName: row.custom_transaction_names?.customName ?? null,
+      customLogoUrl: row.custom_transaction_names?.customLogoUrl ?? null,
+    }) as unknown as Transaction;
+  },
+
+  // Get investment holdings for authenticated user
+  getMyInvestmentHoldings: async (_, { accountId }, { db, user }) => {
+    if (!user) {
+      throw new GraphQLError("Not authenticated", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const conditions: SQL[] = [eq(investmentHoldings.userId, user.id)];
+
+    // Filter by account if provided
+    if (accountId) {
+      conditions.push(eq(investmentHoldings.accountId, accountId));
+    }
+
+    const result = await db
+      .select()
+      .from(investmentHoldings)
+      .where(and(...conditions))
+      .orderBy(desc(investmentHoldings.totalInvestedAmount));
+
+    return result.map((holding) => ({
+      holdingId: holding.holdingId,
+      accountId: holding.accountId,
+      categoryId: holding.categoryId,
+      assetSymbol: holding.assetSymbol,
+      assetName: holding.assetName,
+      totalQuantity: holding.totalQuantity,
+      averageBuyPrice: holding.averageBuyPrice,
+      totalInvestedAmount: holding.totalInvestedAmount,
+      realizedGainLoss: holding.realizedGainLoss,
+      currency: holding.currency,
+      sector: holding.sector,
+      notes: holding.notes,
+      createdAt: holding.createdAt.toISOString(),
+      updatedAt: holding.updatedAt.toISOString(),
+    })) as unknown as InvestmentHolding[];
+  },
+
+  // Get portfolio distribution for donut chart
+  getMyPortfolioDistribution: async (_, { input }, { db, user }) => {
+    if (!user) {
+      throw new GraphQLError("Not authenticated", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const conditions: SQL[] = [eq(investmentHoldings.userId, user.id)];
+
+    // Filter by account IDs if provided
+    if (input?.accountIds && input.accountIds.length > 0) {
+      conditions.push(inArray(investmentHoldings.accountId, input.accountIds));
+    }
+
+    // Filter by category IDs if provided
+    if (input?.categoryIds && input.categoryIds.length > 0) {
+      conditions.push(
+        inArray(investmentHoldings.categoryId, input.categoryIds)
+      );
+    }
+
+    // Aggregate by categoryId
+    const result = await db
+      .select({
+        categoryId: investmentHoldings.categoryId,
+        totalInvestedAmount: sql<string>`COALESCE(SUM(${investmentHoldings.totalInvestedAmount}), '0')`,
+        holdingsCount: sql<number>`COUNT(*)::int`,
+      })
+      .from(investmentHoldings)
+      .where(and(...conditions))
+      .groupBy(investmentHoldings.categoryId);
+
+    // Fetch category details for each group
+    const categoryIds = result.map((r) => r.categoryId);
+
+    const categoriesResult =
+      categoryIds.length > 0
+        ? await db
+            .select()
+            .from(categories)
+            .where(inArray(categories.categoryId, categoryIds))
+        : [];
+
+    const categoryMap = new Map(categoriesResult.map((c) => [c.categoryId, c]));
+
+    return result.map((r) => {
+      const category = categoryMap.get(r.categoryId);
+      if (!category) {
+        throw new GraphQLError("Category not found", {
+          extensions: { code: "CATEGORY_NOT_FOUND" },
+        });
+      }
+
+      return {
+        categoryId: r.categoryId,
+        categoryName: category.categoryName,
+        investmentSector: category.investmentSector,
+        totalInvestedAmount: r.totalInvestedAmount,
+        totalCurrentValue: null,
+        holdingsCount: r.holdingsCount,
+        category: {
+          categoryId: category.categoryId,
+          categoryName: category.categoryName,
+          categoryNumber: category.categoryNumber,
+          categoryType: category.categoryType,
+          investmentSector: category.investmentSector,
+          iconUrl: category.defaultIconUrl,
+          createdAt: category.createdAt.toISOString(),
+          updatedAt: category.createdAt.toISOString(),
+        },
+      };
+    });
+  },
+
+  // Get transaction totals with flexible filtering and grouping
+  getMyTotals: async (_, { input }, { db, user }) => {
+    if (!user) {
+      throw new GraphQLError("Not authenticated", {
+        extensions: { code: "UNAUTHENTICATED" },
+      });
+    }
+
+    const { startDate, endDate, filters, groupBy = "NONE" } = input;
+
+    // Parse dates
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+
+    if (start > end) {
+      throw new GraphQLError("startDate must be before or equal to endDate", {
+        extensions: { code: "INVALID_INPUT" },
+      });
+    }
+
+    // Build base conditions
+    const conditions: SQL[] = [
+      eq(transactions.userId, user.id),
+      gte(transactions.transactionDateTime, start),
+      lte(transactions.transactionDateTime, end),
+    ];
+
+    // Get PREPAID account IDs and add to conditions
+    const prepaidAccountIds = await getPrepaidAccountIds(
+      db,
+      user.id,
+      filters?.accountIds
+    );
+
+    if (prepaidAccountIds.length === 0) {
+      return [];
+    }
+
+    conditions.push(inArray(transactions.accountId, prepaidAccountIds));
+
+    // Apply remaining filters
+    if (filters?.transactionType) {
+      conditions.push(
+        eq(transactions.transactionType, filters.transactionType)
+      );
+    }
+
+    if (filters?.isInvestment !== undefined && filters?.isInvestment !== null) {
+      conditions.push(eq(transactions.isInvestment, filters.isInvestment));
+    }
+
+    if (filters?.isRecurring !== undefined && filters?.isRecurring !== null) {
+      conditions.push(eq(transactions.isRecurring, filters.isRecurring));
+    }
+
+    if (filters?.categoryId) {
+      conditions.push(eq(transactions.categoryId, filters.categoryId));
+    }
+
+    if (
+      filters?.categoryNumber !== undefined &&
+      filters?.categoryNumber !== null
+    ) {
+      const categoryResult = await db
+        .select({ categoryId: categories.categoryId })
+        .from(categories)
+        .where(eq(categories.categoryNumber, filters.categoryNumber))
+        .limit(1);
+
+      if (!categoryResult[0]) {
+        return [];
+      }
+
+      conditions.push(
+        eq(transactions.categoryId, categoryResult[0].categoryId)
+      );
+    }
+
+    if (filters?.customNameId) {
+      conditions.push(eq(transactions.customNameId, filters.customNameId));
+    }
+
+    // Aggregate based on groupBy option
+    const aggregationOptions = { db, conditions, startDate, endDate, filters };
+
+    switch (groupBy) {
+      case "CATEGORY":
+        return aggregateByCategory(aggregationOptions);
+      case "CUSTOM_NAME":
+        return aggregateByCustomName(aggregationOptions);
+      case "ACCOUNT":
+        return aggregateByAccount(aggregationOptions);
+      default:
+        return aggregateWithoutGrouping(aggregationOptions);
+    }
+  },
+
+  // Merge recurring pattern queries
+  ...recurringQueries,
+};

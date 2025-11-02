@@ -290,6 +290,209 @@ export const customTransactionNames = pgTable(
 );
 
 // ===========================
+// INVESTMENT HOLDINGS TABLE WITH RLS
+// ===========================
+
+export const investmentHoldings = pgTable(
+  "investment_holdings",
+  {
+    holdingId: uuid("holding_id").defaultRandom().primaryKey(),
+    userId: uuid("user_id").notNull(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.accountId, { onDelete: "cascade" }),
+    categoryId: uuid("category_id")
+      .notNull()
+      .references(() => categories.categoryId),
+
+    // Asset Information (auto-assigned from transactions)
+    assetSymbol: varchar("asset_symbol", { length: 50 }).notNull(),
+    assetName: varchar("asset_name", { length: 255 }),
+
+    // Current Holdings
+    totalQuantity: decimal("total_quantity", { precision: 15, scale: 6 })
+      .default("0")
+      .notNull(),
+    averageBuyPrice: decimal("average_buy_price", {
+      precision: 15,
+      scale: 4,
+    }),
+    totalInvestedAmount: decimal("total_invested_amount", {
+      precision: 15,
+      scale: 2,
+    })
+      .default("0")
+      .notNull(),
+
+    // Realized Gains (from sales)
+    realizedGainLoss: decimal("realized_gain_loss", {
+      precision: 15,
+      scale: 2,
+    }).default("0"),
+
+    // Metadata
+    currency: varchar("currency", { length: 3 }).default("INR"),
+    sector: varchar("sector", { length: 100 }),
+    notes: text("notes"),
+
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    // Indexes
+    uniqueIndex("holdings_user_account_asset_idx").on(
+      table.userId,
+      table.accountId,
+      table.assetSymbol
+    ),
+    index("holdings_user_idx").on(table.userId),
+    index("holdings_account_idx").on(table.accountId),
+    index("holdings_asset_idx").on(table.assetSymbol),
+    index("holdings_category_idx").on(table.categoryId),
+    index("holdings_user_quantity_idx").on(
+      table.userId,
+      table.totalQuantity.desc()
+    ),
+
+    // Foreign key to Supabase auth.users
+    foreignKey({
+      columns: [table.userId],
+      foreignColumns: [authUsers.id],
+      name: "holdings_user_id_fkey",
+    }).onDelete("cascade"),
+
+    // RLS Policies
+    pgPolicy("authenticated users can view own holdings", {
+      for: "select",
+      to: authenticatedRole,
+      using: sql`(select auth.uid()) = user_id`,
+    }),
+
+    pgPolicy("authenticated users can insert own holdings", {
+      for: "insert",
+      to: authenticatedRole,
+      withCheck: sql`(select auth.uid()) = user_id`,
+    }),
+
+    pgPolicy("authenticated users can update own holdings", {
+      for: "update",
+      to: authenticatedRole,
+      using: sql`(select auth.uid()) = user_id`,
+      withCheck: sql`(select auth.uid()) = user_id`,
+    }),
+
+    pgPolicy("authenticated users can delete own holdings", {
+      for: "delete",
+      to: authenticatedRole,
+      using: sql`(select auth.uid()) = user_id`,
+    }),
+  ]
+);
+
+// ===========================
+// RECURRING PATTERNS TABLE WITH RLS
+// ===========================
+
+export const recurringPatterns = pgTable(
+  "recurring_patterns",
+  {
+    patternId: uuid("pattern_id").defaultRandom().primaryKey(),
+    userId: uuid("user_id").notNull(),
+    accountId: uuid("account_id")
+      .notNull()
+      .references(() => accounts.accountId, { onDelete: "cascade" }),
+    categoryId: uuid("category_id")
+      .notNull()
+      .references(() => categories.categoryId),
+    customNameId: uuid("custom_name_id").references(
+      () => customTransactionNames.customNameId
+    ),
+
+    // Template Data
+    amount: decimal("amount", { precision: 15, scale: 2 }).notNull(),
+    transactionType: transactionTypeEnum("transaction_type").notNull(),
+    description: text("description"),
+    location: varchar("location", { length: 255 }),
+    paymentMethod: varchar("payment_method", { length: 100 }),
+
+    // Scheduling
+    frequency: recurringFrequencyEnum("frequency").notNull(),
+    startDate: timestamp("start_date", { withTimezone: true }).notNull(),
+    endDate: timestamp("end_date", { withTimezone: true }), // NULL = indefinite
+    nextDueDate: timestamp("next_due_date", { withTimezone: true }).notNull(),
+    lastGeneratedDate: timestamp("last_generated_date", { withTimezone: true }),
+
+    // State Management
+    isActive: boolean("is_active").default(true).notNull(),
+    isPaused: boolean("is_paused").default(false).notNull(),
+
+    // Tracking
+    generatedCount: integer("generated_count").default(0).notNull(),
+    skippedCount: integer("skipped_count").default(0).notNull(),
+
+    // Metadata
+    notes: text("notes"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    // Indexes
+    index("recurring_patterns_user_idx").on(table.userId),
+    index("recurring_patterns_user_active_idx").on(
+      table.userId,
+      table.isActive
+    ),
+    index("recurring_patterns_next_due_idx").on(
+      table.nextDueDate,
+      table.isActive
+    ),
+    index("recurring_patterns_account_idx").on(table.accountId),
+    index("recurring_patterns_category_idx").on(table.categoryId),
+
+    // Foreign key to Supabase auth.users
+    foreignKey({
+      columns: [table.userId],
+      foreignColumns: [authUsers.id],
+      name: "recurring_patterns_user_id_fkey",
+    }).onDelete("cascade"),
+
+    // RLS Policies
+    pgPolicy("authenticated users can view own recurring patterns", {
+      for: "select",
+      to: authenticatedRole,
+      using: sql`(select auth.uid()) = user_id`,
+    }),
+
+    pgPolicy("authenticated users can insert own recurring patterns", {
+      for: "insert",
+      to: authenticatedRole,
+      withCheck: sql`(select auth.uid()) = user_id`,
+    }),
+
+    pgPolicy("authenticated users can update own recurring patterns", {
+      for: "update",
+      to: authenticatedRole,
+      using: sql`(select auth.uid()) = user_id`,
+      withCheck: sql`(select auth.uid()) = user_id`,
+    }),
+
+    pgPolicy("authenticated users can delete own recurring patterns", {
+      for: "delete",
+      to: authenticatedRole,
+      using: sql`(select auth.uid()) = user_id`,
+    }),
+  ]
+);
+
+// ===========================
 // TRANSACTIONS TABLE WITH RLS
 // ===========================
 
@@ -337,6 +540,10 @@ export const transactions = pgTable(
     isRecurring: boolean("is_recurring").default(false).notNull(),
     recurringFrequency: recurringFrequencyEnum("recurring_frequency"),
     recurringPatternName: varchar("recurring_pattern_name", { length: 255 }),
+    recurringPatternId: uuid("recurring_pattern_id"), // Links to recurring_patterns table
+    isRecurringGenerated: boolean("is_recurring_generated")
+      .default(false)
+      .notNull(), // Auto-created vs manual
 
     // Transfer Related
     isTransfer: boolean("is_transfer").default(false).notNull(),
@@ -369,6 +576,10 @@ export const transactions = pgTable(
     ),
     index("transactions_user_amount_idx").on(table.userId, table.amount),
     index("transactions_recurring_idx").on(table.isRecurring, table.userId),
+    index("transactions_recurring_pattern_idx").on(
+      table.recurringPatternId,
+      table.userId
+    ),
     index("transactions_investment_idx").on(
       table.isInvestment,
       table.userId,
@@ -389,6 +600,13 @@ export const transactions = pgTable(
       columns: [table.linkedTransactionId],
       foreignColumns: [table.transactionId],
       name: "transactions_linked_transaction_fkey",
+    }).onDelete("set null"),
+
+    // Foreign key to recurring patterns
+    foreignKey({
+      columns: [table.recurringPatternId],
+      foreignColumns: [recurringPatterns.patternId],
+      name: "transactions_recurring_pattern_fkey",
     }).onDelete("set null"),
 
     // RLS Policies
@@ -425,11 +643,14 @@ export const transactions = pgTable(
 
 export const accountsRelations = relations(accounts, ({ many }) => ({
   transactions: many(transactions),
+  investmentHoldings: many(investmentHoldings),
+  recurringPatterns: many(recurringPatterns),
 }));
 
 export const categoriesRelations = relations(categories, ({ many }) => ({
   transactions: many(transactions),
   customNames: many(customTransactionNames),
+  recurringPatterns: many(recurringPatterns),
 }));
 
 export const customTransactionNamesRelations = relations(
@@ -440,6 +661,26 @@ export const customTransactionNamesRelations = relations(
       references: [categories.categoryId],
     }),
     transactions: many(transactions),
+    recurringPatterns: many(recurringPatterns),
+  })
+);
+
+export const recurringPatternsRelations = relations(
+  recurringPatterns,
+  ({ one, many }) => ({
+    account: one(accounts, {
+      fields: [recurringPatterns.accountId],
+      references: [accounts.accountId],
+    }),
+    category: one(categories, {
+      fields: [recurringPatterns.categoryId],
+      references: [categories.categoryId],
+    }),
+    customName: one(customTransactionNames, {
+      fields: [recurringPatterns.customNameId],
+      references: [customTransactionNames.customNameId],
+    }),
+    generatedTransactions: many(transactions),
   })
 );
 
@@ -460,7 +701,25 @@ export const transactionsRelations = relations(transactions, ({ one }) => ({
     fields: [transactions.linkedTransactionId],
     references: [transactions.transactionId],
   }),
+  recurringPattern: one(recurringPatterns, {
+    fields: [transactions.recurringPatternId],
+    references: [recurringPatterns.patternId],
+  }),
 }));
+
+export const investmentHoldingsRelations = relations(
+  investmentHoldings,
+  ({ one }) => ({
+    account: one(accounts, {
+      fields: [investmentHoldings.accountId],
+      references: [accounts.accountId],
+    }),
+    category: one(categories, {
+      fields: [investmentHoldings.categoryId],
+      references: [categories.categoryId],
+    }),
+  })
+);
 
 // ===========================
 // TYPE EXPORTS (for TypeScript)
@@ -472,6 +731,8 @@ export type DbCategory = typeof categories.$inferSelect;
 export type DbCustomTransactionName =
   typeof customTransactionNames.$inferSelect;
 export type DbTransaction = typeof transactions.$inferSelect;
+export type DbInvestmentHolding = typeof investmentHoldings.$inferSelect;
+export type DbRecurringPattern = typeof recurringPatterns.$inferSelect;
 
 // Insert Types (for creating new records)
 export type InsertAccount = typeof accounts.$inferInsert;
@@ -479,6 +740,8 @@ export type InsertCategory = typeof categories.$inferInsert;
 export type InsertCustomTransactionName =
   typeof customTransactionNames.$inferInsert;
 export type InsertTransaction = typeof transactions.$inferInsert;
+export type InsertInvestmentHolding = typeof investmentHoldings.$inferInsert;
+export type InsertRecurringPattern = typeof recurringPatterns.$inferInsert;
 
 // Enum Types
 export type AccountType = (typeof accountTypeEnum.enumValues)[number];
