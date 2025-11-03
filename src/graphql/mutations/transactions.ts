@@ -9,14 +9,13 @@ import {
   investmentHoldings,
   recurringPatterns,
   transactions,
-} from "../db/schema";
+} from "../../db/schema";
 import type {
-  Account,
   MutationResolvers,
   Transaction,
   UpdateTransactionInput,
-} from "../generated/graphql";
-import { recurringMutations } from "./recurring-mutations";
+} from "../../generated/graphql";
+import { verifyAccountOwnership } from "./accounts";
 
 // Helper function to format transaction for GraphQL
 const formatTransactionForGraphQL = (
@@ -70,25 +69,6 @@ const formatTransactionForGraphQL = (
   customNameText: null,
   customLogoUrl: null,
 });
-
-// Helper function to verify account ownership
-const verifyAccountOwnership = async (
-  db: PostgresJsDatabase<typeof schema>,
-  accountId: string,
-  userId: string
-): Promise<void> => {
-  const account = await db
-    .select()
-    .from(accounts)
-    .where(and(eq(accounts.accountId, accountId), eq(accounts.userId, userId)))
-    .limit(1);
-
-  if (!account[0]) {
-    throw new GraphQLError("Account not found or access denied", {
-      extensions: { code: "FORBIDDEN" },
-    });
-  }
-};
 
 // Helper function to verify transaction ownership
 const verifyTransactionOwnership = async (
@@ -241,6 +221,126 @@ const QUANTITY_DECIMALS = 6;
 const PRICE_DECIMALS = 4;
 const AMOUNT_DECIMALS = 2;
 
+// Helper function to find or create loan account
+const findOrCreateLoanAccount = async (
+  db: PostgresJsDatabase<typeof schema>,
+  params: {
+    userId: string;
+    transactionType: "DEBIT" | "CREDIT";
+    customName?: string;
+    amount: string;
+    transactionDateTime: Date;
+  }
+): Promise<string> => {
+  const { userId, transactionType, customName, amount, transactionDateTime } =
+    params;
+
+  // Determine account type based on transaction type
+  // DEBIT = Money going out = You lent money = LOAN_LENT
+  // CREDIT = Money coming in = You borrowed money = LOAN_BORROWED
+  const accountType =
+    transactionType === "DEBIT" ? "LOAN_LENT" : "LOAN_BORROWED";
+  const accountName =
+    customName || `Loan ${transactionType === "DEBIT" ? "Lent" : "Borrowed"}`;
+
+  // Check if a loan account already exists with this name
+  const existingAccount = await db
+    .select()
+    .from(accounts)
+    .where(
+      and(
+        eq(accounts.userId, userId),
+        eq(accounts.accountType, accountType),
+        eq(accounts.accountName, accountName)
+      )
+    )
+    .limit(1);
+
+  if (existingAccount[0]) {
+    return existingAccount[0].accountId;
+  }
+
+  // Create new loan account
+  const [newAccount] = await db
+    .insert(accounts)
+    .values({
+      userId,
+      accountType,
+      accountGroup: "LOAN",
+      accountName,
+      currentBalance: "0.00", // Balance will be managed by transactions
+      loanAmount: amount,
+      loanStartDate: transactionDateTime,
+      isActive: true,
+      isDefault: false,
+    })
+    .returning();
+
+  return newAccount.accountId;
+};
+
+// Helper function to update account balance after transaction
+const updateAccountBalance = async (
+  db: PostgresJsDatabase<typeof schema>,
+  params: {
+    accountId: string;
+    amount: string;
+    transactionType: "DEBIT" | "CREDIT";
+    transactionDateTime: Date;
+  }
+): Promise<void> => {
+  const { accountId, amount, transactionType, transactionDateTime } = params;
+
+  // Get current account balance
+  const [account] = await db
+    .select()
+    .from(accounts)
+    .where(eq(accounts.accountId, accountId))
+    .limit(1);
+
+  if (!account) {
+    throw new GraphQLError("Account not found", {
+      extensions: { code: "ACCOUNT_NOT_FOUND" },
+    });
+  }
+
+  const currentBalance = Number.parseFloat(account.currentBalance);
+  const transactionAmount = Number.parseFloat(amount);
+
+  // Calculate new balance based on transaction type
+  // DEBIT = Money going out = Decrease balance (or increase for loan accounts)
+  // CREDIT = Money coming in = Increase balance (or decrease for loan accounts)
+  let newBalance: number;
+
+  if (account.accountGroup === "POSTPAID" || account.accountGroup === "LOAN") {
+    // For POSTPAID (credit cards) and LOAN accounts:
+    // DEBIT increases the balance (you owe more or lent more)
+    // CREDIT decreases the balance (you paid off or received payment)
+    newBalance =
+      transactionType === "DEBIT"
+        ? currentBalance + transactionAmount
+        : currentBalance - transactionAmount;
+  } else {
+    // For PREPAID and INVESTMENT accounts:
+    // DEBIT decreases the balance (money goes out)
+    // CREDIT increases the balance (money comes in)
+    newBalance =
+      transactionType === "DEBIT"
+        ? currentBalance - transactionAmount
+        : currentBalance + transactionAmount;
+  }
+
+  // Update account balance
+  await db
+    .update(accounts)
+    .set({
+      currentBalance: newBalance.toFixed(AMOUNT_DECIMALS),
+      balanceUpdatedAt: transactionDateTime,
+      updatedAt: new Date(),
+    })
+    .where(eq(accounts.accountId, accountId));
+};
+
 // Helper function to update investment holdings
 const updateInvestmentHoldings = async (
   db: PostgresJsDatabase<typeof schema>,
@@ -368,22 +468,34 @@ const updateInvestmentHoldings = async (
 };
 
 // Helper function to apply simple field updates
-// Helper function to apply simple field updates
 const applyBasicFieldUpdates = (
   updates: Partial<typeof transactions.$inferInsert>,
   input: UpdateTransactionInput
 ): void => {
+  // Amount updates are disabled to maintain balance integrity
+  // If amount needs to be changed, delete and recreate the transaction
   if (input.amount !== undefined && input.amount !== null) {
-    updates.amount = input.amount;
+    throw new GraphQLError(
+      "Cannot modify transaction amount. Delete and recreate the transaction instead.",
+      {
+        extensions: { code: "AMOUNT_MODIFICATION_NOT_ALLOWED" },
+      }
+    );
   }
-  if (input.description !== undefined && input.description !== null) {
-    updates.description = input.description;
-  }
+  // DateTime updates are disabled to maintain historical integrity and accurate reporting
   if (
     input.transactionDateTime !== undefined &&
     input.transactionDateTime !== null
   ) {
-    updates.transactionDateTime = new Date(input.transactionDateTime);
+    throw new GraphQLError(
+      "Cannot modify transaction date/time. Delete and recreate the transaction instead.",
+      {
+        extensions: { code: "DATETIME_MODIFICATION_NOT_ALLOWED" },
+      }
+    );
+  }
+  if (input.description !== undefined && input.description !== null) {
+    updates.description = input.description;
   }
   if (input.location !== undefined && input.location !== null) {
     updates.location = input.location;
@@ -486,128 +598,10 @@ const buildTransactionUpdates = async (
   return updates;
 };
 
-export const mutations: MutationResolvers = {
-  // Create a new account
-  createAccount: async (_, { input }, { db, user }) => {
-    if (!user) {
-      throw new GraphQLError("Not authenticated", {
-        extensions: { code: "UNAUTHENTICATED" },
-      });
-    }
-
-    const newAccount = await db
-      .insert(accounts)
-      .values({
-        userId: user.id,
-        accountType: input.accountType,
-        accountGroup: input.accountGroup,
-        accountName: input.accountName,
-        accountNumber: input.accountNumber,
-        institutionName: input.institutionName,
-        currentBalance: input.initialBalance || "0.00",
-        logoUrl: input.logoUrl,
-        creditLimit: input.creditLimit,
-      })
-      .returning();
-
-    const account = newAccount[0];
-    return {
-      ...account,
-      balanceUpdatedAt: account.balanceUpdatedAt.toISOString(),
-      manualBalanceUpdatedAt: account.manualBalanceUpdatedAt.toISOString(),
-      loanStartDate: account.loanStartDate?.toISOString() ?? null,
-      loanEndDate: account.loanEndDate?.toISOString() ?? null,
-      createdAt: account.createdAt.toISOString(),
-      updatedAt: account.updatedAt.toISOString(),
-      lastTransactionDate: account.balanceUpdatedAt
-        ? account.balanceUpdatedAt.toISOString()
-        : null,
-    } as unknown as Account;
-  },
-
-  // Update an account
-  updateAccount: async (_, { accountId, input }, { db, user }) => {
-    if (!user) {
-      throw new GraphQLError("Not authenticated", {
-        extensions: { code: "UNAUTHENTICATED" },
-      });
-    }
-
-    // Verify account ownership
-    await verifyAccountOwnership(db, accountId, user.id);
-
-    // Build update object
-    const updates: Partial<typeof accounts.$inferInsert> & {
-      updatedAt: Date;
-    } = {
-      updatedAt: new Date(),
-    };
-
-    // Update basic fields
-    if (input.accountName) {
-      updates.accountName = input.accountName;
-    }
-    if (input.accountNumber) {
-      updates.accountNumber = input.accountNumber;
-    }
-    if (input.institutionName) {
-      updates.institutionName = input.institutionName;
-    }
-    if (input.logoUrl) {
-      updates.logoUrl = input.logoUrl;
-    }
-    if (input.isActive !== null) {
-      updates.isActive = input.isActive;
-    }
-    if (input.isDefault !== null) {
-      updates.isDefault = input.isDefault;
-    }
-
-    // Update balance if provided
-    if (input.currentBalance) {
-      updates.currentBalance = input.currentBalance;
-      updates.balanceUpdatedAt = new Date();
-      updates.manualBalanceUpdatedAt = new Date();
-    }
-
-    const updated = await db
-      .update(accounts)
-      .set(updates)
-      .where(eq(accounts.accountId, accountId))
-      .returning();
-
-    const account = updated[0];
-    return {
-      ...account,
-      balanceUpdatedAt: account.balanceUpdatedAt.toISOString(),
-      manualBalanceUpdatedAt: account.manualBalanceUpdatedAt.toISOString(),
-      loanStartDate: account.loanStartDate?.toISOString() ?? null,
-      loanEndDate: account.loanEndDate?.toISOString() ?? null,
-      createdAt: account.createdAt.toISOString(),
-      updatedAt: account.updatedAt.toISOString(),
-      lastTransactionDate: account.balanceUpdatedAt
-        ? account.balanceUpdatedAt.toISOString()
-        : null,
-    } as unknown as Account;
-  },
-
-  // Delete an account
-  deleteAccount: async (_, { accountId }, { db, user }) => {
-    if (!user) {
-      throw new GraphQLError("Not authenticated", {
-        extensions: { code: "UNAUTHENTICATED" },
-      });
-    }
-
-    // Verify account ownership
-    await verifyAccountOwnership(db, accountId, user.id);
-
-    // Delete account (cascade will handle related transactions)
-    await db.delete(accounts).where(eq(accounts.accountId, accountId));
-
-    return { success: true, accountId };
-  },
-
+export const transactionMutations: Pick<
+  MutationResolvers,
+  "createTransaction" | "updateTransaction" | "deleteTransaction"
+> = {
   // Create a transaction
   createTransaction: async (_, { input }, { db, user }) => {
     if (!user) {
@@ -647,18 +641,26 @@ export const mutations: MutationResolvers = {
       otherAccount = otherAccountResult[0];
     }
 
-    console.log(
-      `CreateTransaction input.transactionDateTime: ${input.transactionDateTime}`
-    );
-    console.log(
-      `CreateTransaction converted date time: ${new Date(input.transactionDateTime)}`
-    );
-
     // Determine if this should be an investment transaction
     // If transfer to an INVESTMENT group account, mark as investment
     const isInvestmentTransaction =
       input.isInvestment ||
       (input.isTransfer && otherAccount?.accountGroup === "INVESTMENT");
+
+    // Check if this is a loan transaction and handle it as a transfer
+    const isLoanTransaction = category.categoryName.toLowerCase() === "loans";
+    let loanAccountId: string | undefined;
+
+    if (isLoanTransaction) {
+      // Find or create the appropriate loan account
+      loanAccountId = await findOrCreateLoanAccount(db, {
+        userId: user.id,
+        transactionType: input.transactionType,
+        customName: input.customName || undefined,
+        amount: input.amount,
+        transactionDateTime: new Date(input.transactionDateTime),
+      });
+    }
 
     // Create the main transaction
     const newTransaction = await db
@@ -692,16 +694,34 @@ export const mutations: MutationResolvers = {
 
     const transaction = newTransaction[0];
 
-    // Handle transfer paired transaction
-    if (input.isTransfer && input.otherAccountId) {
+    // Update the main account balance
+    await updateAccountBalance(db, {
+      accountId: input.accountId,
+      amount: input.amount,
+      transactionType: input.transactionType,
+      transactionDateTime: new Date(input.transactionDateTime),
+    });
+
+    // Handle transfer paired transaction (including loan transactions)
+    if (
+      (input.isTransfer && input.otherAccountId) ||
+      (isLoanTransaction && loanAccountId)
+    ) {
+      // For loan transactions, determine the paired transaction type
+      // DEBIT from main account -> CREDIT to LOAN_LENT (they owe you)
+      // CREDIT to main account -> DEBIT from LOAN_BORROWED (you owe them)
       const pairedTransactionType =
         input.transactionType === "DEBIT" ? "CREDIT" : "DEBIT";
+
+      const targetAccountId = isLoanTransaction
+        ? (loanAccountId as string)
+        : (input.otherAccountId as string);
 
       const pairedTransaction = await db
         .insert(transactions)
         .values({
           userId: user.id,
-          accountId: input.otherAccountId,
+          accountId: targetAccountId,
           categoryId: category.categoryId,
           amount: input.amount,
           transactionType: pairedTransactionType,
@@ -716,10 +736,21 @@ export const mutations: MutationResolvers = {
         })
         .returning();
 
-      // Update main transaction with linked ID
+      // Update the target account balance
+      await updateAccountBalance(db, {
+        accountId: targetAccountId,
+        amount: input.amount,
+        transactionType: pairedTransactionType,
+        transactionDateTime: new Date(input.transactionDateTime),
+      });
+
+      // Update main transaction with linked ID and mark as transfer
       await db
         .update(transactions)
-        .set({ linkedTransactionId: pairedTransaction[0].transactionId })
+        .set({
+          linkedTransactionId: pairedTransaction[0].transactionId,
+          isTransfer: true,
+        })
         .where(eq(transactions.transactionId, transaction.transactionId));
     }
 
@@ -855,12 +886,35 @@ export const mutations: MutationResolvers = {
       });
     }
 
-    // Verify transaction ownership
-    const transaction = await verifyTransactionOwnership(
-      db,
-      transactionId,
-      user.id
-    );
+    // Check if transaction exists (might have been already deleted by linked transaction)
+    const existingTransaction = await db
+      .select()
+      .from(transactions)
+      .where(
+        and(
+          eq(transactions.transactionId, transactionId),
+          eq(transactions.userId, user.id)
+        )
+      )
+      .limit(1);
+
+    if (!existingTransaction[0]) {
+      // Transaction already deleted (possibly by a linked transaction deletion)
+      return { success: true, transactionId };
+    }
+
+    const transaction = existingTransaction[0];
+
+    // Reverse the account balance before deleting
+    // We need to reverse the transaction effect on the balance
+    await updateAccountBalance(db, {
+      accountId: transaction.accountId,
+      amount: transaction.amount,
+      // Reverse the transaction type to undo the balance change
+      transactionType:
+        transaction.transactionType === "DEBIT" ? "CREDIT" : "DEBIT",
+      transactionDateTime: new Date(),
+    });
 
     // If this is an investment transaction, reverse the holdings
     if (
@@ -888,6 +942,27 @@ export const mutations: MutationResolvers = {
 
     // If this is a transfer transaction, delete both transactions
     if (transaction.isTransfer && transaction.linkedTransactionId) {
+      // Get the linked transaction to reverse its balance too
+      const linkedTransaction = await db
+        .select()
+        .from(transactions)
+        .where(eq(transactions.transactionId, transaction.linkedTransactionId))
+        .limit(1);
+
+      if (linkedTransaction[0]) {
+        // Reverse the linked account balance
+        await updateAccountBalance(db, {
+          accountId: linkedTransaction[0].accountId,
+          amount: linkedTransaction[0].amount,
+          // Reverse the transaction type to undo the balance change
+          transactionType:
+            linkedTransaction[0].transactionType === "DEBIT"
+              ? "CREDIT"
+              : "DEBIT",
+          transactionDateTime: new Date(),
+        });
+      }
+
       // Delete both the main transaction and the linked one
       // Using OR to handle both directions of the link
       await db
@@ -981,7 +1056,4 @@ export const mutations: MutationResolvers = {
 
     return { success: true, transactionId };
   },
-
-  // Merge recurring pattern mutations
-  ...recurringMutations,
 };

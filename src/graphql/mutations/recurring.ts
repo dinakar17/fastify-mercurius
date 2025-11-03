@@ -4,8 +4,8 @@ import {
   categories,
   customTransactionNames,
   recurringPatterns,
-} from "../db/schema";
-import type { MutationResolvers } from "../generated/graphql";
+} from "@/db/schema";
+import type { MutationResolvers } from "@/generated/graphql";
 
 const DAYS_IN_WEEK = 7;
 

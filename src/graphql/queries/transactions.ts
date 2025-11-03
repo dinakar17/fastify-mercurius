@@ -14,28 +14,21 @@ import {
   sql,
 } from "drizzle-orm";
 import { GraphQLError } from "graphql";
-import { MAX_TRANSACTION_LIMIT } from "../config/constants";
+import { MAX_TRANSACTION_LIMIT } from "../../config/constants";
 import {
   accounts,
   categories,
   customTransactionNames,
-  investmentHoldings,
   transactions,
-} from "../db/schema";
-import type {
-  Account,
-  InvestmentHolding,
-  QueryResolvers,
-  Transaction,
-} from "../generated/graphql";
-import { recurringQueries } from "./recurring-queries";
+} from "../../db/schema";
+import type { QueryResolvers, Transaction } from "../../generated/graphql";
 import {
   aggregateByAccount,
   aggregateByCategory,
   aggregateByCustomName,
   aggregateWithoutGrouping,
   getPrepaidAccountIds,
-} from "./totals-helpers";
+} from "../totals-helpers";
 
 const DEFAULT_TRANSACTION_LIMIT = 50;
 
@@ -272,71 +265,6 @@ const getOrderByClause = (
   return desc(transactions.transactionDateTime);
 };
 
-// Helper function to build all filter conditions
-const buildFilterConditions = (
-  userId: string,
-  options: {
-    accountId?: string | string[] | null;
-    categoryNumber?: number | null;
-    customNameId?: string | null;
-    type?: "credit" | "debit" | "recurring" | "investment" | "transfer" | null;
-    month?: string | null;
-    search?: string | null;
-    amountRange?: { min?: string | null; max?: string | null } | null;
-    cursor?: string | null;
-    order?: "new_to_old" | "old_to_new" | "high_to_low" | "low_to_high" | null;
-    isInvestment?: boolean | null;
-    isRecurring?: boolean | null;
-    isTransfer?: boolean | null;
-    startDate?: string | null;
-    endDate?: string | null;
-    assetSymbol?: string | null;
-    investmentAction?: string | null;
-    recurringFrequency?: string | null;
-    location?: string | null;
-    paymentMethod?: string | null;
-  }
-): SQL[] => {
-  const conditions: SQL[] = [eq(transactions.userId, userId)];
-
-  if (options.accountId) {
-    addAccountFilter(conditions, options.accountId);
-  }
-
-  if (options.categoryNumber !== undefined && options.categoryNumber !== null) {
-    conditions.push(eq(categories.categoryNumber, options.categoryNumber));
-  }
-
-  if (options.customNameId) {
-    conditions.push(eq(transactions.customNameId, options.customNameId));
-  }
-
-  if (options.type) {
-    addTypeFilter(conditions, options.type);
-  }
-
-  if (options.month) {
-    addMonthFilter(conditions, options.month);
-  }
-
-  if (options.search) {
-    addSearchFilter(conditions, options.search);
-  }
-
-  if (options.amountRange) {
-    addAmountRangeFilter(conditions, options.amountRange);
-  }
-
-  if (options.cursor) {
-    addCursorFilter(conditions, options.cursor, options.order || "new_to_old");
-  }
-
-  // Apply additional filters
-  applyAdditionalFilters(conditions, options);
-
-  return conditions;
-};
-
 // Helper function to apply additional filters
 const applyAdditionalFilters = (
   conditions: SQL[],
@@ -420,72 +348,75 @@ const applyAdditionalFilters = (
   }
 };
 
-export const queries: QueryResolvers = {
-  // Get all accounts for authenticated user
-  getMyAccounts: async (_, __, { db, user }) => {
-    if (!user) {
-      throw new GraphQLError("Not authenticated", {
-        extensions: { code: "UNAUTHENTICATED" },
-      });
-    }
+// Helper function to build all filter conditions
+const buildFilterConditions = (
+  userId: string,
+  options: {
+    accountId?: string | string[] | null;
+    categoryNumber?: number | null;
+    customNameId?: string | null;
+    type?: "credit" | "debit" | "recurring" | "investment" | "transfer" | null;
+    month?: string | null;
+    search?: string | null;
+    amountRange?: { min?: string | null; max?: string | null } | null;
+    cursor?: string | null;
+    order?: "new_to_old" | "old_to_new" | "high_to_low" | "low_to_high" | null;
+    isInvestment?: boolean | null;
+    isRecurring?: boolean | null;
+    isTransfer?: boolean | null;
+    startDate?: string | null;
+    endDate?: string | null;
+    assetSymbol?: string | null;
+    investmentAction?: string | null;
+    recurringFrequency?: string | null;
+    location?: string | null;
+    paymentMethod?: string | null;
+  }
+): SQL[] => {
+  const conditions: SQL[] = [eq(transactions.userId, userId)];
 
-    const result = await db
-      .select()
-      .from(accounts)
-      .where(eq(accounts.userId, user.id))
-      .orderBy(desc(accounts.createdAt));
+  if (options.accountId) {
+    addAccountFilter(conditions, options.accountId);
+  }
 
-    return result.map((account) => ({
-      ...account,
-      balanceUpdatedAt: account.balanceUpdatedAt.toISOString(),
-      manualBalanceUpdatedAt: account.manualBalanceUpdatedAt.toISOString(),
-      loanStartDate: account.loanStartDate?.toISOString() ?? null,
-      loanEndDate: account.loanEndDate?.toISOString() ?? null,
-      createdAt: account.createdAt.toISOString(),
-      updatedAt: account.updatedAt.toISOString(),
-      lastTransactionDate: account.balanceUpdatedAt
-        ? account.balanceUpdatedAt.toISOString()
-        : null,
-    })) as unknown as Account[];
-  },
+  if (options.categoryNumber !== undefined && options.categoryNumber !== null) {
+    conditions.push(eq(categories.categoryNumber, options.categoryNumber));
+  }
 
-  // Get specific account by ID
-  getAccount: async (_, { accountId }, { db, user }) => {
-    if (!user) {
-      throw new GraphQLError("Not authenticated", {
-        extensions: { code: "UNAUTHENTICATED" },
-      });
-    }
+  if (options.customNameId) {
+    conditions.push(eq(transactions.customNameId, options.customNameId));
+  }
 
-    const result = await db
-      .select()
-      .from(accounts)
-      .where(
-        and(eq(accounts.accountId, accountId), eq(accounts.userId, user.id))
-      )
-      .limit(1);
+  if (options.type) {
+    addTypeFilter(conditions, options.type);
+  }
 
-    if (!result[0]) {
-      throw new GraphQLError("Account not found", {
-        extensions: { code: "NOT_FOUND" },
-      });
-    }
+  if (options.month) {
+    addMonthFilter(conditions, options.month);
+  }
 
-    const account = result[0];
-    return {
-      ...account,
-      balanceUpdatedAt: account.balanceUpdatedAt.toISOString(),
-      manualBalanceUpdatedAt: account.manualBalanceUpdatedAt.toISOString(),
-      loanStartDate: account.loanStartDate?.toISOString() ?? null,
-      loanEndDate: account.loanEndDate?.toISOString() ?? null,
-      createdAt: account.createdAt.toISOString(),
-      updatedAt: account.updatedAt.toISOString(),
-      lastTransactionDate: account.balanceUpdatedAt
-        ? account.balanceUpdatedAt.toISOString()
-        : null,
-    } as unknown as Account;
-  },
+  if (options.search) {
+    addSearchFilter(conditions, options.search);
+  }
 
+  if (options.amountRange) {
+    addAmountRangeFilter(conditions, options.amountRange);
+  }
+
+  if (options.cursor) {
+    addCursorFilter(conditions, options.cursor, options.order || "new_to_old");
+  }
+
+  // Apply additional filters
+  applyAdditionalFilters(conditions, options);
+
+  return conditions;
+};
+
+export const transactionQueries: Pick<
+  QueryResolvers,
+  "getMyTransactions" | "getMyTransaction" | "getMyTotals"
+> = {
   // Get transactions for authenticated user
   getMyTransactions: async (_, { options }, { db, user }) => {
     if (!user) {
@@ -646,120 +577,6 @@ export const queries: QueryResolvers = {
     }) as unknown as Transaction;
   },
 
-  // Get investment holdings for authenticated user
-  getMyInvestmentHoldings: async (_, { accountId }, { db, user }) => {
-    if (!user) {
-      throw new GraphQLError("Not authenticated", {
-        extensions: { code: "UNAUTHENTICATED" },
-      });
-    }
-
-    const conditions: SQL[] = [eq(investmentHoldings.userId, user.id)];
-
-    // Filter by account if provided
-    if (accountId) {
-      conditions.push(eq(investmentHoldings.accountId, accountId));
-    }
-
-    const result = await db
-      .select()
-      .from(investmentHoldings)
-      .where(and(...conditions))
-      .orderBy(desc(investmentHoldings.totalInvestedAmount));
-
-    return result.map((holding) => ({
-      holdingId: holding.holdingId,
-      accountId: holding.accountId,
-      categoryId: holding.categoryId,
-      assetSymbol: holding.assetSymbol,
-      assetName: holding.assetName,
-      totalQuantity: holding.totalQuantity,
-      averageBuyPrice: holding.averageBuyPrice,
-      totalInvestedAmount: holding.totalInvestedAmount,
-      realizedGainLoss: holding.realizedGainLoss,
-      currency: holding.currency,
-      sector: holding.sector,
-      notes: holding.notes,
-      createdAt: holding.createdAt.toISOString(),
-      updatedAt: holding.updatedAt.toISOString(),
-    })) as unknown as InvestmentHolding[];
-  },
-
-  // Get portfolio distribution for donut chart
-  getMyPortfolioDistribution: async (_, { input }, { db, user }) => {
-    if (!user) {
-      throw new GraphQLError("Not authenticated", {
-        extensions: { code: "UNAUTHENTICATED" },
-      });
-    }
-
-    const conditions: SQL[] = [eq(investmentHoldings.userId, user.id)];
-
-    // Filter by account IDs if provided
-    if (input?.accountIds && input.accountIds.length > 0) {
-      conditions.push(inArray(investmentHoldings.accountId, input.accountIds));
-    }
-
-    // Filter by category IDs if provided
-    if (input?.categoryIds && input.categoryIds.length > 0) {
-      conditions.push(
-        inArray(investmentHoldings.categoryId, input.categoryIds)
-      );
-    }
-
-    // Aggregate by categoryId
-    const result = await db
-      .select({
-        categoryId: investmentHoldings.categoryId,
-        totalInvestedAmount: sql<string>`COALESCE(SUM(${investmentHoldings.totalInvestedAmount}), '0')`,
-        holdingsCount: sql<number>`COUNT(*)::int`,
-      })
-      .from(investmentHoldings)
-      .where(and(...conditions))
-      .groupBy(investmentHoldings.categoryId);
-
-    // Fetch category details for each group
-    const categoryIds = result.map((r) => r.categoryId);
-
-    const categoriesResult =
-      categoryIds.length > 0
-        ? await db
-            .select()
-            .from(categories)
-            .where(inArray(categories.categoryId, categoryIds))
-        : [];
-
-    const categoryMap = new Map(categoriesResult.map((c) => [c.categoryId, c]));
-
-    return result.map((r) => {
-      const category = categoryMap.get(r.categoryId);
-      if (!category) {
-        throw new GraphQLError("Category not found", {
-          extensions: { code: "CATEGORY_NOT_FOUND" },
-        });
-      }
-
-      return {
-        categoryId: r.categoryId,
-        categoryName: category.categoryName,
-        investmentSector: category.investmentSector,
-        totalInvestedAmount: r.totalInvestedAmount,
-        totalCurrentValue: null,
-        holdingsCount: r.holdingsCount,
-        category: {
-          categoryId: category.categoryId,
-          categoryName: category.categoryName,
-          categoryNumber: category.categoryNumber,
-          categoryType: category.categoryType,
-          investmentSector: category.investmentSector,
-          iconUrl: category.defaultIconUrl,
-          createdAt: category.createdAt.toISOString(),
-          updatedAt: category.createdAt.toISOString(),
-        },
-      };
-    });
-  },
-
   // Get transaction totals with flexible filtering and grouping
   getMyTotals: async (_, { input }, { db, user }) => {
     if (!user) {
@@ -856,7 +673,4 @@ export const queries: QueryResolvers = {
         return aggregateWithoutGrouping(aggregationOptions);
     }
   },
-
-  // Merge recurring pattern queries
-  ...recurringQueries,
 };

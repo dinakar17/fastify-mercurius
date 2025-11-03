@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, type SQL } from "drizzle-orm";
 import { GraphQLError } from "graphql";
-import { categories, recurringPatterns } from "../db/schema";
-import type { QueryResolvers } from "../generated/graphql";
+import { categories, recurringPatterns } from "@/db/schema";
+import type { QueryResolvers } from "@/generated/graphql";
 
 const DEFAULT_PATTERN_LIMIT = 100;
 

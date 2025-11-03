@@ -1,5 +1,4 @@
 import { GraphQLResolveInfo } from 'graphql';
-import { DbAccount, InsertAccount, DbCategory, InsertCategory, DbCustomTransactionName, InsertCustomTransactionName, DbTransaction, InsertTransaction } from '../db/schema';
 import { MercuriusContext } from '../types';
 export type Maybe<T> = T | null;
 export type InputMaybe<T> = Maybe<T>;
