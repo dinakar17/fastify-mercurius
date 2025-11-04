@@ -379,6 +379,7 @@ input GetRecurringPatternsInput {
   accountId: [ID!] # Filter by specific accounts
   categoryNumber: Int # Filter by category
   isActive: Boolean # Filter active/inactive patterns
+  transactionType: TransactionType # Filter by DEBIT or CREDIT (default: DEBIT)
   limit: Int # Limit results
 }
 
@@ -418,6 +419,10 @@ input GetTransactionsInput {
   # Additional filters
   location: String # Filter by location
   paymentMethod: String # Filter by payment method
+  
+  # Link filters
+  investmentHoldingId: ID # Filter by specific investment holding
+  recurringPatternId: ID # Filter by specific recurring pattern
 }
 
 # ===========================
@@ -441,9 +446,31 @@ type DeleteResponse {
   patternId: ID
 }
 
+type RecurringPatternSummary {
+  paid: String!
+  overdue: String!
+  dueToday: String!
+  upcoming: String!
+  total: String!
+}
+
 type RecurringPatternResponse {
   patterns: [RecurringPattern!]!
   totalCount: Int!
+  summary: RecurringPatternSummary!
+}
+
+type MonthlyRecurringSummary {
+  paid: Int!
+  overdue: Int!
+  dueToday: Int!
+  upcoming: Int!
+  total: Int!
+}
+
+type MonthlyRecurringPatternsResponse {
+  patterns: [RecurringPattern!]!
+  summary: MonthlyRecurringSummary!
 }
 
 # ===========================
@@ -551,6 +578,8 @@ type Query {
   
   # Recurring pattern queries
   getMyRecurringPatterns(input: GetRecurringPatternsInput): RecurringPatternResponse!
+  getRecurringPattern(patternId: ID!): RecurringPattern!
+  getMonthlyRecurringPatterns(year: Int!, month: Int!): MonthlyRecurringPatternsResponse!
 }
 
 # ===========================

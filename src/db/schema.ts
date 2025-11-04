@@ -332,6 +332,7 @@ export const investmentHoldings = pgTable(
 
     // Metadata
     currency: varchar("currency", { length: 3 }).default("INR"),
+    // Todo: Delete this later. We get the investment_sector from the category id
     sector: varchar("sector", { length: 100 }),
     notes: text("notes"),
 
@@ -522,6 +523,7 @@ export const transactions = pgTable(
     pricePerUnit: decimal("price_per_unit", { precision: 15, scale: 4 }),
     investmentAction: investmentActionEnum("investment_action"),
     feesCharges: decimal("fees_charges", { precision: 10, scale: 2 }),
+    investmentHoldingId: uuid("investment_holding_id"), // Links to investment_holdings table
 
     // Date/Time
     transactionDateTime: timestamp("transaction_date_time", {
@@ -607,6 +609,13 @@ export const transactions = pgTable(
       columns: [table.recurringPatternId],
       foreignColumns: [recurringPatterns.patternId],
       name: "transactions_recurring_pattern_fkey",
+    }).onDelete("set null"),
+
+    // Foreign key to investment holdings
+    foreignKey({
+      columns: [table.investmentHoldingId],
+      foreignColumns: [investmentHoldings.holdingId],
+      name: "transactions_investment_holding_fkey",
     }).onDelete("set null"),
 
     // RLS Policies

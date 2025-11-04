@@ -160,6 +160,7 @@ export type GetRecurringPatternsInput = {
   isActive?: InputMaybe<Scalars['Boolean']['input']>;
   limit?: InputMaybe<Scalars['Int']['input']>;
   status?: InputMaybe<RecurringPatternStatus>;
+  transactionType?: InputMaybe<TransactionType>;
 };
 
 export type GetTotalsInput = {
@@ -178,6 +179,7 @@ export type GetTransactionsInput = {
   customNameId?: InputMaybe<Scalars['ID']['input']>;
   endDate?: InputMaybe<Scalars['String']['input']>;
   investmentAction?: InputMaybe<InvestmentAction>;
+  investmentHoldingId?: InputMaybe<Scalars['ID']['input']>;
   isInvestment?: InputMaybe<Scalars['Boolean']['input']>;
   isRecurring?: InputMaybe<Scalars['Boolean']['input']>;
   isTransfer?: InputMaybe<Scalars['Boolean']['input']>;
@@ -187,6 +189,7 @@ export type GetTransactionsInput = {
   order?: InputMaybe<TransactionOrderType>;
   paymentMethod?: InputMaybe<Scalars['String']['input']>;
   recurringFrequency?: InputMaybe<RecurringFrequency>;
+  recurringPatternId?: InputMaybe<Scalars['ID']['input']>;
   search?: InputMaybe<Scalars['String']['input']>;
   startDate?: InputMaybe<Scalars['String']['input']>;
   type?: InputMaybe<TransactionFilterType>;
@@ -223,6 +226,21 @@ export type InvestmentHolding = {
   totalInvestedAmount: Scalars['String']['output'];
   totalQuantity: Scalars['String']['output'];
   updatedAt: Scalars['String']['output'];
+};
+
+export type MonthlyRecurringPatternsResponse = {
+  __typename?: 'MonthlyRecurringPatternsResponse';
+  patterns: Array<RecurringPattern>;
+  summary: MonthlyRecurringSummary;
+};
+
+export type MonthlyRecurringSummary = {
+  __typename?: 'MonthlyRecurringSummary';
+  dueToday: Scalars['Int']['output'];
+  overdue: Scalars['Int']['output'];
+  paid: Scalars['Int']['output'];
+  total: Scalars['Int']['output'];
+  upcoming: Scalars['Int']['output'];
 };
 
 export type Mutation = {
@@ -296,6 +314,7 @@ export type PortfolioDistributionItem = {
 export type Query = {
   __typename?: 'Query';
   getAccount: Account;
+  getMonthlyRecurringPatterns: MonthlyRecurringPatternsResponse;
   getMyAccounts: Array<Account>;
   getMyInvestmentHoldings: Array<InvestmentHolding>;
   getMyPortfolioDistribution: Array<PortfolioDistributionItem>;
@@ -303,11 +322,18 @@ export type Query = {
   getMyTotals: Array<TotalResult>;
   getMyTransaction: Transaction;
   getMyTransactions: TransactionConnection;
+  getRecurringPattern: RecurringPattern;
 };
 
 
 export type QueryGetAccountArgs = {
   accountId: Scalars['ID']['input'];
+};
+
+
+export type QueryGetMonthlyRecurringPatternsArgs = {
+  month: Scalars['Int']['input'];
+  year: Scalars['Int']['input'];
 };
 
 
@@ -338,6 +364,11 @@ export type QueryGetMyTransactionArgs = {
 
 export type QueryGetMyTransactionsArgs = {
   options?: InputMaybe<GetTransactionsInput>;
+};
+
+
+export type QueryGetRecurringPatternArgs = {
+  patternId: Scalars['ID']['input'];
 };
 
 export type RecurringFrequency =
@@ -378,6 +409,7 @@ export type RecurringPattern = {
 export type RecurringPatternResponse = {
   __typename?: 'RecurringPatternResponse';
   patterns: Array<RecurringPattern>;
+  summary: RecurringPatternSummary;
   totalCount: Scalars['Int']['output'];
 };
 
@@ -386,6 +418,15 @@ export type RecurringPatternStatus =
   | 'OVERDUE'
   | 'PAID'
   | 'UPCOMING';
+
+export type RecurringPatternSummary = {
+  __typename?: 'RecurringPatternSummary';
+  dueToday: Scalars['String']['output'];
+  overdue: Scalars['String']['output'];
+  paid: Scalars['String']['output'];
+  total: Scalars['String']['output'];
+  upcoming: Scalars['String']['output'];
+};
 
 export type TotalMetadata = {
   __typename?: 'TotalMetadata';
@@ -632,6 +673,8 @@ export type ResolversTypes = ResolversObject<{
   Int: ResolverTypeWrapper<Scalars['Int']['output']>;
   InvestmentAction: InvestmentAction;
   InvestmentHolding: ResolverTypeWrapper<InvestmentHolding>;
+  MonthlyRecurringPatternsResponse: ResolverTypeWrapper<MonthlyRecurringPatternsResponse>;
+  MonthlyRecurringSummary: ResolverTypeWrapper<MonthlyRecurringSummary>;
   Mutation: ResolverTypeWrapper<Record<PropertyKey, never>>;
   PageInfo: ResolverTypeWrapper<PageInfo>;
   PortfolioDistributionItem: ResolverTypeWrapper<PortfolioDistributionItem>;
@@ -640,6 +683,7 @@ export type ResolversTypes = ResolversObject<{
   RecurringPattern: ResolverTypeWrapper<RecurringPattern>;
   RecurringPatternResponse: ResolverTypeWrapper<RecurringPatternResponse>;
   RecurringPatternStatus: RecurringPatternStatus;
+  RecurringPatternSummary: ResolverTypeWrapper<RecurringPatternSummary>;
   String: ResolverTypeWrapper<Scalars['String']['output']>;
   TotalMetadata: ResolverTypeWrapper<TotalMetadata>;
   TotalResult: ResolverTypeWrapper<TotalResult>;
@@ -673,12 +717,15 @@ export type ResolversParentTypes = ResolversObject<{
   ID: Scalars['ID']['output'];
   Int: Scalars['Int']['output'];
   InvestmentHolding: InvestmentHolding;
+  MonthlyRecurringPatternsResponse: MonthlyRecurringPatternsResponse;
+  MonthlyRecurringSummary: MonthlyRecurringSummary;
   Mutation: Record<PropertyKey, never>;
   PageInfo: PageInfo;
   PortfolioDistributionItem: PortfolioDistributionItem;
   Query: Record<PropertyKey, never>;
   RecurringPattern: RecurringPattern;
   RecurringPatternResponse: RecurringPatternResponse;
+  RecurringPatternSummary: RecurringPatternSummary;
   String: Scalars['String']['output'];
   TotalMetadata: TotalMetadata;
   TotalResult: TotalResult;
@@ -763,6 +810,19 @@ export type InvestmentHoldingResolvers<ContextType = MercuriusContext, ParentTyp
   updatedAt?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
 }>;
 
+export type MonthlyRecurringPatternsResponseResolvers<ContextType = MercuriusContext, ParentType extends ResolversParentTypes['MonthlyRecurringPatternsResponse'] = ResolversParentTypes['MonthlyRecurringPatternsResponse']> = ResolversObject<{
+  patterns?: Resolver<Array<ResolversTypes['RecurringPattern']>, ParentType, ContextType>;
+  summary?: Resolver<ResolversTypes['MonthlyRecurringSummary'], ParentType, ContextType>;
+}>;
+
+export type MonthlyRecurringSummaryResolvers<ContextType = MercuriusContext, ParentType extends ResolversParentTypes['MonthlyRecurringSummary'] = ResolversParentTypes['MonthlyRecurringSummary']> = ResolversObject<{
+  dueToday?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
+  overdue?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
+  paid?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
+  total?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
+  upcoming?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
+}>;
+
 export type MutationResolvers<ContextType = MercuriusContext, ParentType extends ResolversParentTypes['Mutation'] = ResolversParentTypes['Mutation']> = ResolversObject<{
   createAccount?: Resolver<ResolversTypes['Account'], ParentType, ContextType, RequireFields<MutationCreateAccountArgs, 'input'>>;
   createTransaction?: Resolver<ResolversTypes['Transaction'], ParentType, ContextType, RequireFields<MutationCreateTransactionArgs, 'input'>>;
@@ -790,6 +850,7 @@ export type PortfolioDistributionItemResolvers<ContextType = MercuriusContext, P
 
 export type QueryResolvers<ContextType = MercuriusContext, ParentType extends ResolversParentTypes['Query'] = ResolversParentTypes['Query']> = ResolversObject<{
   getAccount?: Resolver<ResolversTypes['Account'], ParentType, ContextType, RequireFields<QueryGetAccountArgs, 'accountId'>>;
+  getMonthlyRecurringPatterns?: Resolver<ResolversTypes['MonthlyRecurringPatternsResponse'], ParentType, ContextType, RequireFields<QueryGetMonthlyRecurringPatternsArgs, 'month' | 'year'>>;
   getMyAccounts?: Resolver<Array<ResolversTypes['Account']>, ParentType, ContextType>;
   getMyInvestmentHoldings?: Resolver<Array<ResolversTypes['InvestmentHolding']>, ParentType, ContextType, Partial<QueryGetMyInvestmentHoldingsArgs>>;
   getMyPortfolioDistribution?: Resolver<Array<ResolversTypes['PortfolioDistributionItem']>, ParentType, ContextType, Partial<QueryGetMyPortfolioDistributionArgs>>;
@@ -797,6 +858,7 @@ export type QueryResolvers<ContextType = MercuriusContext, ParentType extends Re
   getMyTotals?: Resolver<Array<ResolversTypes['TotalResult']>, ParentType, ContextType, RequireFields<QueryGetMyTotalsArgs, 'input'>>;
   getMyTransaction?: Resolver<ResolversTypes['Transaction'], ParentType, ContextType, RequireFields<QueryGetMyTransactionArgs, 'transactionId'>>;
   getMyTransactions?: Resolver<ResolversTypes['TransactionConnection'], ParentType, ContextType, Partial<QueryGetMyTransactionsArgs>>;
+  getRecurringPattern?: Resolver<ResolversTypes['RecurringPattern'], ParentType, ContextType, RequireFields<QueryGetRecurringPatternArgs, 'patternId'>>;
 }>;
 
 export type RecurringPatternResolvers<ContextType = MercuriusContext, ParentType extends ResolversParentTypes['RecurringPattern'] = ResolversParentTypes['RecurringPattern']> = ResolversObject<{
@@ -829,7 +891,16 @@ export type RecurringPatternResolvers<ContextType = MercuriusContext, ParentType
 
 export type RecurringPatternResponseResolvers<ContextType = MercuriusContext, ParentType extends ResolversParentTypes['RecurringPatternResponse'] = ResolversParentTypes['RecurringPatternResponse']> = ResolversObject<{
   patterns?: Resolver<Array<ResolversTypes['RecurringPattern']>, ParentType, ContextType>;
+  summary?: Resolver<ResolversTypes['RecurringPatternSummary'], ParentType, ContextType>;
   totalCount?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
+}>;
+
+export type RecurringPatternSummaryResolvers<ContextType = MercuriusContext, ParentType extends ResolversParentTypes['RecurringPatternSummary'] = ResolversParentTypes['RecurringPatternSummary']> = ResolversObject<{
+  dueToday?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  overdue?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  paid?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  total?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  upcoming?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
 }>;
 
 export type TotalMetadataResolvers<ContextType = MercuriusContext, ParentType extends ResolversParentTypes['TotalMetadata'] = ResolversParentTypes['TotalMetadata']> = ResolversObject<{
@@ -910,12 +981,15 @@ export type Resolvers<ContextType = MercuriusContext> = ResolversObject<{
   CustomTransactionName?: CustomTransactionNameResolvers<ContextType>;
   DeleteResponse?: DeleteResponseResolvers<ContextType>;
   InvestmentHolding?: InvestmentHoldingResolvers<ContextType>;
+  MonthlyRecurringPatternsResponse?: MonthlyRecurringPatternsResponseResolvers<ContextType>;
+  MonthlyRecurringSummary?: MonthlyRecurringSummaryResolvers<ContextType>;
   Mutation?: MutationResolvers<ContextType>;
   PageInfo?: PageInfoResolvers<ContextType>;
   PortfolioDistributionItem?: PortfolioDistributionItemResolvers<ContextType>;
   Query?: QueryResolvers<ContextType>;
   RecurringPattern?: RecurringPatternResolvers<ContextType>;
   RecurringPatternResponse?: RecurringPatternResponseResolvers<ContextType>;
+  RecurringPatternSummary?: RecurringPatternSummaryResolvers<ContextType>;
   TotalMetadata?: TotalMetadataResolvers<ContextType>;
   TotalResult?: TotalResultResolvers<ContextType>;
   TotalsFilter?: TotalsFilterResolvers<ContextType>;

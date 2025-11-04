@@ -33,7 +33,7 @@ import {
 const DEFAULT_TRANSACTION_LIMIT = 50;
 
 // Helper function to format transaction for GraphQL
-const formatTransactionForGraphQL = (
+export const formatTransactionForGraphQL = (
   transaction: typeof transactions.$inferSelect,
   joinedData?: {
     accountName?: string | null;
@@ -279,6 +279,8 @@ const applyAdditionalFilters = (
     recurringFrequency?: string | null;
     location?: string | null;
     paymentMethod?: string | null;
+    investmentHoldingId?: string | null;
+    recurringPatternId?: string | null;
   }
 ): void => {
   // Boolean filters
@@ -346,6 +348,19 @@ const applyAdditionalFilters = (
       ilike(transactions.paymentMethod, `%${options.paymentMethod}%`)
     );
   }
+
+  // Link filters
+  if (options.investmentHoldingId) {
+    conditions.push(
+      eq(transactions.investmentHoldingId, options.investmentHoldingId)
+    );
+  }
+
+  if (options.recurringPatternId) {
+    conditions.push(
+      eq(transactions.recurringPatternId, options.recurringPatternId)
+    );
+  }
 };
 
 // Helper function to build all filter conditions
@@ -371,6 +386,8 @@ const buildFilterConditions = (
     recurringFrequency?: string | null;
     location?: string | null;
     paymentMethod?: string | null;
+    investmentHoldingId?: string | null;
+    recurringPatternId?: string | null;
   }
 ): SQL[] => {
   const conditions: SQL[] = [eq(transactions.userId, userId)];
@@ -446,6 +463,8 @@ export const transactionQueries: Pick<
       recurringFrequency,
       location,
       paymentMethod,
+      investmentHoldingId,
+      recurringPatternId,
     } = options ?? {};
 
     // Build all filter conditions
@@ -469,6 +488,8 @@ export const transactionQueries: Pick<
       recurringFrequency,
       location,
       paymentMethod,
+      investmentHoldingId,
+      recurringPatternId,
     });
 
     const orderByClause = getOrderByClause(order || "new_to_old");

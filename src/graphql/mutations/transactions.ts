@@ -1,4 +1,4 @@
-import { and, eq, or } from "drizzle-orm";
+import { and, eq, isNull, or } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { GraphQLError } from "graphql";
 import type * as schema from "@/db/schema";
@@ -15,60 +15,8 @@ import type {
   Transaction,
   UpdateTransactionInput,
 } from "../../generated/graphql";
+import { formatTransactionForGraphQL } from "../queries/transactions";
 import { verifyAccountOwnership } from "./accounts";
-
-// Helper function to format transaction for GraphQL
-const formatTransactionForGraphQL = (
-  transaction: typeof transactions.$inferSelect
-) => ({
-  transactionId: transaction.transactionId,
-  accountId: transaction.accountId,
-  amount: transaction.amount,
-  currency: transaction.currency,
-  transactionType: transaction.transactionType,
-  transactionDateTime: transaction.transactionDateTime.toISOString(),
-  description: transaction.description,
-  location: transaction.location,
-  paymentMethod: transaction.paymentMethod,
-  attachments: transaction.attachments
-    ? JSON.stringify(transaction.attachments)
-    : null,
-
-  // Investment fields
-  isInvestment: transaction.isInvestment,
-  assetSymbol: transaction.assetSymbol,
-  quantity: transaction.quantity,
-  pricePerUnit: transaction.pricePerUnit,
-  investmentAction: transaction.investmentAction,
-  feesCharges: transaction.feesCharges,
-
-  // Recurring fields
-  isRecurring: transaction.isRecurring,
-  recurringFrequency: transaction.recurringFrequency,
-  recurringPatternName: transaction.recurringPatternName,
-
-  // Transfer fields
-  isTransfer: transaction.isTransfer,
-  linkedTransactionId: transaction.linkedTransactionId,
-
-  // Timestamps
-  createdAt: transaction.createdAt.toISOString(),
-  updatedAt: transaction.updatedAt.toISOString(),
-
-  // Null fields for joined data
-  accountName: null,
-  accountNumber: null,
-  accountLogoUrl: null,
-  categoryId: null,
-  categoryName: null,
-  categoryNumber: null,
-  categoryType: null,
-  investmentSector: null,
-  categoryIconUrl: null,
-  customNameId: null,
-  customNameText: null,
-  customLogoUrl: null,
-});
 
 // Helper function to verify transaction ownership
 const verifyTransactionOwnership = async (
@@ -216,68 +164,146 @@ const calculateNextDueDate = (
   return next;
 };
 
+// Helper function to handle recurring pattern creation or linking
+const handleRecurringPattern = async (
+  db: PostgresJsDatabase<typeof schema>,
+  params: {
+    userId: string;
+    accountId: string;
+    categoryId: string;
+    customNameId?: string;
+    amount: string;
+    transactionType: "DEBIT" | "CREDIT";
+    description?: string | null;
+    location?: string | null;
+    paymentMethod?: string | null;
+    frequency: "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY";
+    transactionDateTime: Date;
+    recurringPatternName?: string | null;
+    transactionId: string;
+  }
+): Promise<void> => {
+  const {
+    userId,
+    categoryId,
+    customNameId,
+    amount,
+    transactionType,
+    description,
+    location,
+    paymentMethod,
+    frequency,
+    transactionDateTime,
+    recurringPatternName,
+    transactionId,
+    accountId,
+  } = params;
+
+  // Check if a pattern already exists based on customNameId and categoryId
+  // (not accountId, as user can pay from different accounts)
+  const whereConditions = [
+    eq(recurringPatterns.userId, userId),
+    eq(recurringPatterns.categoryId, categoryId),
+    eq(recurringPatterns.isActive, true),
+  ];
+
+  // Add customNameId condition
+  if (customNameId) {
+    whereConditions.push(eq(recurringPatterns.customNameId, customNameId));
+  } else {
+    whereConditions.push(isNull(recurringPatterns.customNameId));
+  }
+
+  const existingPattern = await db
+    .select()
+    .from(recurringPatterns)
+    .where(and(...whereConditions))
+    .limit(1);
+
+  if (existingPattern[0]) {
+    // Pattern exists - link this transaction to it and increment generated count
+    const currentCount = existingPattern[0].generatedCount;
+    const newCount = currentCount + 1;
+
+    // Only update lastGeneratedDate if this transaction is more recent
+    const currentLastGenerated = existingPattern[0].lastGeneratedDate;
+    const shouldUpdateLastGenerated =
+      !currentLastGenerated ||
+      transactionDateTime > new Date(currentLastGenerated);
+
+    // Calculate nextDueDate from the pattern's CURRENT nextDueDate, not from transaction date
+    // This keeps the schedule consistent regardless of when user actually pays
+    const currentNextDue = new Date(existingPattern[0].nextDueDate);
+    const newNextDueDate = calculateNextDueDate(currentNextDue, frequency);
+
+    const updateData: {
+      generatedCount: number;
+      updatedAt: Date;
+      lastGeneratedDate?: Date;
+      nextDueDate: Date;
+    } = {
+      generatedCount: newCount,
+      nextDueDate: newNextDueDate, // Always update to next scheduled date
+      updatedAt: new Date(),
+    };
+
+    if (shouldUpdateLastGenerated) {
+      updateData.lastGeneratedDate = transactionDateTime;
+    }
+
+    await db
+      .update(recurringPatterns)
+      .set(updateData)
+      .where(eq(recurringPatterns.patternId, existingPattern[0].patternId));
+
+    // Link transaction to existing pattern
+    await db
+      .update(transactions)
+      .set({
+        recurringPatternId: existingPattern[0].patternId,
+        isRecurringGenerated: true,
+      })
+      .where(eq(transactions.transactionId, transactionId));
+  } else {
+    // No pattern exists - create a new one
+    const nextDueDate = calculateNextDueDate(transactionDateTime, frequency);
+
+    const [newPattern] = await db
+      .insert(recurringPatterns)
+      .values({
+        userId,
+        accountId,
+        categoryId,
+        customNameId: customNameId || null,
+        amount,
+        transactionType,
+        description: description || null,
+        location: location || null,
+        paymentMethod: paymentMethod || null,
+        frequency,
+        startDate: transactionDateTime,
+        nextDueDate,
+        lastGeneratedDate: transactionDateTime,
+        generatedCount: 1,
+        notes: recurringPatternName || null,
+      })
+      .returning();
+
+    // Link transaction to new pattern
+    await db
+      .update(transactions)
+      .set({
+        recurringPatternId: newPattern.patternId,
+        isRecurringGenerated: true,
+      })
+      .where(eq(transactions.transactionId, transactionId));
+  }
+};
+
 // Constants for decimal precision
 const QUANTITY_DECIMALS = 6;
 const PRICE_DECIMALS = 4;
 const AMOUNT_DECIMALS = 2;
-
-// Helper function to find or create loan account
-const findOrCreateLoanAccount = async (
-  db: PostgresJsDatabase<typeof schema>,
-  params: {
-    userId: string;
-    transactionType: "DEBIT" | "CREDIT";
-    customName?: string;
-    amount: string;
-    transactionDateTime: Date;
-  }
-): Promise<string> => {
-  const { userId, transactionType, customName, amount, transactionDateTime } =
-    params;
-
-  // Determine account type based on transaction type
-  // DEBIT = Money going out = You lent money = LOAN_LENT
-  // CREDIT = Money coming in = You borrowed money = LOAN_BORROWED
-  const accountType =
-    transactionType === "DEBIT" ? "LOAN_LENT" : "LOAN_BORROWED";
-  const accountName =
-    customName || `Loan ${transactionType === "DEBIT" ? "Lent" : "Borrowed"}`;
-
-  // Check if a loan account already exists with this name
-  const existingAccount = await db
-    .select()
-    .from(accounts)
-    .where(
-      and(
-        eq(accounts.userId, userId),
-        eq(accounts.accountType, accountType),
-        eq(accounts.accountName, accountName)
-      )
-    )
-    .limit(1);
-
-  if (existingAccount[0]) {
-    return existingAccount[0].accountId;
-  }
-
-  // Create new loan account
-  const [newAccount] = await db
-    .insert(accounts)
-    .values({
-      userId,
-      accountType,
-      accountGroup: "LOAN",
-      accountName,
-      currentBalance: "0.00", // Balance will be managed by transactions
-      loanAmount: amount,
-      loanStartDate: transactionDateTime,
-      isActive: true,
-      isDefault: false,
-    })
-    .returning();
-
-  return newAccount.accountId;
-};
 
 // Helper function to update account balance after transaction
 const updateAccountBalance = async (
@@ -353,6 +379,7 @@ const updateInvestmentHoldings = async (
     pricePerUnit: string;
     investmentAction: string;
     amount: string;
+    transactionId: string;
   }
 ): Promise<void> => {
   const {
@@ -364,9 +391,10 @@ const updateInvestmentHoldings = async (
     pricePerUnit,
     investmentAction,
     amount,
+    transactionId,
   } = params;
 
-  // Find existing holding
+  // Find existing holding based on assetSymbol (unique key)
   const existingHolding = await db
     .select()
     .from(investmentHoldings)
@@ -383,6 +411,8 @@ const updateInvestmentHoldings = async (
   const amountNum = Number.parseFloat(amount);
 
   if (investmentAction === "BUY") {
+    let holdingId: string;
+
     if (existingHolding[0]) {
       // Update existing holding
       const currentQty = Number.parseFloat(existingHolding[0].totalQuantity);
@@ -403,18 +433,33 @@ const updateInvestmentHoldings = async (
           updatedAt: new Date(),
         })
         .where(eq(investmentHoldings.holdingId, existingHolding[0].holdingId));
+
+      holdingId = existingHolding[0].holdingId;
     } else {
       // Create new holding
-      await db.insert(investmentHoldings).values({
-        userId,
-        accountId,
-        categoryId,
-        assetSymbol,
-        totalQuantity: quantity,
-        averageBuyPrice: pricePerUnit,
-        totalInvestedAmount: amount,
-      });
+      const [newHolding] = await db
+        .insert(investmentHoldings)
+        .values({
+          userId,
+          accountId,
+          categoryId,
+          assetSymbol,
+          totalQuantity: quantity,
+          averageBuyPrice: pricePerUnit,
+          totalInvestedAmount: amount,
+        })
+        .returning();
+
+      holdingId = newHolding.holdingId;
     }
+
+    // Link transaction to holding
+    await db
+      .update(transactions)
+      .set({
+        investmentHoldingId: holdingId,
+      })
+      .where(eq(transactions.transactionId, transactionId));
   } else if (investmentAction === "SELL") {
     if (!existingHolding[0]) {
       throw new GraphQLError("Cannot sell asset that is not in holdings", {
@@ -445,7 +490,7 @@ const updateInvestmentHoldings = async (
     );
 
     if (newQty === 0) {
-      // Delete holding if fully sold
+      // Delete holding if fully sold - but keep the holdingId link on transaction
       await db
         .delete(investmentHoldings)
         .where(eq(investmentHoldings.holdingId, existingHolding[0].holdingId));
@@ -463,8 +508,23 @@ const updateInvestmentHoldings = async (
         })
         .where(eq(investmentHoldings.holdingId, existingHolding[0].holdingId));
     }
+
+    // Link transaction to holding (even if sold out, keep reference)
+    await db
+      .update(transactions)
+      .set({
+        investmentHoldingId: existingHolding[0].holdingId,
+      })
+      .where(eq(transactions.transactionId, transactionId));
+  } else if (existingHolding[0]) {
+    // For DIVIDEND, BONUS, SPLIT - link to existing holding but don't update quantities
+    await db
+      .update(transactions)
+      .set({
+        investmentHoldingId: existingHolding[0].holdingId,
+      })
+      .where(eq(transactions.transactionId, transactionId));
   }
-  // For DIVIDEND, BONUS, SPLIT - no holding updates needed (they're just recorded as transactions)
 };
 
 // Helper function to apply simple field updates
@@ -647,21 +707,6 @@ export const transactionMutations: Pick<
       input.isInvestment ||
       (input.isTransfer && otherAccount?.accountGroup === "INVESTMENT");
 
-    // Check if this is a loan transaction and handle it as a transfer
-    const isLoanTransaction = category.categoryName.toLowerCase() === "loans";
-    let loanAccountId: string | undefined;
-
-    if (isLoanTransaction) {
-      // Find or create the appropriate loan account
-      loanAccountId = await findOrCreateLoanAccount(db, {
-        userId: user.id,
-        transactionType: input.transactionType,
-        customName: input.customName || undefined,
-        amount: input.amount,
-        transactionDateTime: new Date(input.transactionDateTime),
-      });
-    }
-
     // Create the main transaction
     const newTransaction = await db
       .insert(transactions)
@@ -702,26 +747,16 @@ export const transactionMutations: Pick<
       transactionDateTime: new Date(input.transactionDateTime),
     });
 
-    // Handle transfer paired transaction (including loan transactions)
-    if (
-      (input.isTransfer && input.otherAccountId) ||
-      (isLoanTransaction && loanAccountId)
-    ) {
-      // For loan transactions, determine the paired transaction type
-      // DEBIT from main account -> CREDIT to LOAN_LENT (they owe you)
-      // CREDIT to main account -> DEBIT from LOAN_BORROWED (you owe them)
+    // Handle transfer paired transaction
+    if (input.isTransfer && input.otherAccountId) {
       const pairedTransactionType =
         input.transactionType === "DEBIT" ? "CREDIT" : "DEBIT";
-
-      const targetAccountId = isLoanTransaction
-        ? (loanAccountId as string)
-        : (input.otherAccountId as string);
 
       const pairedTransaction = await db
         .insert(transactions)
         .values({
           userId: user.id,
-          accountId: targetAccountId,
+          accountId: input.otherAccountId,
           categoryId: category.categoryId,
           amount: input.amount,
           transactionType: pairedTransactionType,
@@ -738,7 +773,7 @@ export const transactionMutations: Pick<
 
       // Update the target account balance
       await updateAccountBalance(db, {
-        accountId: targetAccountId,
+        accountId: input.otherAccountId,
         amount: input.amount,
         transactionType: pairedTransactionType,
         transactionDateTime: new Date(input.transactionDateTime),
@@ -771,47 +806,31 @@ export const transactionMutations: Pick<
         pricePerUnit: input.pricePerUnit,
         investmentAction: input.investmentAction,
         amount: input.amount,
+        transactionId: transaction.transactionId,
       });
     }
 
-    // Create recurring pattern if isRecurring is enabled
+    // Handle recurring pattern if isRecurring is enabled
     if (input.isRecurring && input.recurringFrequency) {
-      const transactionDate = new Date(input.transactionDateTime);
-      const nextDueDate = calculateNextDueDate(
-        transactionDate,
-        input.recurringFrequency as "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY"
-      );
-
-      // Create the recurring pattern
-      const [newPattern] = await db
-        .insert(recurringPatterns)
-        .values({
-          userId: user.id,
-          accountId: input.accountId,
-          categoryId: category.categoryId,
-          customNameId: customNameId || null,
-          amount: input.amount,
-          transactionType: input.transactionType,
-          description: input.description,
-          location: input.location,
-          paymentMethod: input.paymentMethod,
-          frequency: input.recurringFrequency,
-          startDate: transactionDate,
-          nextDueDate,
-          lastGeneratedDate: transactionDate,
-          generatedCount: 1,
-          notes: input.recurringPatternName || null,
-        })
-        .returning();
-
-      // Update the transaction with the recurring pattern ID
-      await db
-        .update(transactions)
-        .set({
-          recurringPatternId: newPattern.patternId,
-          isRecurringGenerated: true,
-        })
-        .where(eq(transactions.transactionId, transaction.transactionId));
+      await handleRecurringPattern(db, {
+        userId: user.id,
+        accountId: input.accountId,
+        categoryId: category.categoryId,
+        customNameId,
+        amount: input.amount,
+        transactionType: input.transactionType,
+        description: input.description,
+        location: input.location,
+        paymentMethod: input.paymentMethod,
+        frequency: input.recurringFrequency as
+          | "DAILY"
+          | "WEEKLY"
+          | "MONTHLY"
+          | "YEARLY",
+        transactionDateTime: new Date(input.transactionDateTime),
+        recurringPatternName: input.recurringPatternName,
+        transactionId: transaction.transactionId,
+      });
     }
 
     return formatTransactionForGraphQL(transaction) as unknown as Transaction;
@@ -924,20 +943,83 @@ export const transactionMutations: Pick<
       transaction.pricePerUnit &&
       transaction.investmentAction
     ) {
-      // Reverse the action (BUY becomes SELL, SELL becomes BUY)
-      const reverseAction =
-        transaction.investmentAction === "BUY" ? "SELL" : "BUY";
+      // Find the holding to reverse
+      const holding = await db
+        .select()
+        .from(investmentHoldings)
+        .where(
+          and(
+            eq(investmentHoldings.userId, user.id),
+            eq(investmentHoldings.accountId, transaction.accountId),
+            eq(investmentHoldings.assetSymbol, transaction.assetSymbol)
+          )
+        )
+        .limit(1);
 
-      await updateInvestmentHoldings(db, {
-        userId: user.id,
-        accountId: transaction.accountId,
-        categoryId: transaction.categoryId,
-        assetSymbol: transaction.assetSymbol,
-        quantity: transaction.quantity,
-        pricePerUnit: transaction.pricePerUnit,
-        investmentAction: reverseAction,
-        amount: transaction.amount,
-      });
+      if (holding[0]) {
+        const quantityNum = Number.parseFloat(transaction.quantity);
+        const amountNum = Number.parseFloat(transaction.amount);
+
+        if (transaction.investmentAction === "BUY") {
+          // Reverse BUY: decrease quantity and invested amount
+          const currentQty = Number.parseFloat(holding[0].totalQuantity);
+          const currentInvested = Number.parseFloat(
+            holding[0].totalInvestedAmount
+          );
+
+          const newQty = currentQty - quantityNum;
+          const newInvested = currentInvested - amountNum;
+
+          if (newQty <= 0) {
+            // Delete holding if quantity reaches zero or below
+            await db
+              .delete(investmentHoldings)
+              .where(eq(investmentHoldings.holdingId, holding[0].holdingId));
+          } else {
+            const newAvgPrice = newInvested / newQty;
+            await db
+              .update(investmentHoldings)
+              .set({
+                totalQuantity: newQty.toFixed(QUANTITY_DECIMALS),
+                totalInvestedAmount: newInvested.toFixed(AMOUNT_DECIMALS),
+                averageBuyPrice: newAvgPrice.toFixed(PRICE_DECIMALS),
+                updatedAt: new Date(),
+              })
+              .where(eq(investmentHoldings.holdingId, holding[0].holdingId));
+          }
+        } else if (transaction.investmentAction === "SELL") {
+          // Reverse SELL: increase quantity and invested amount
+          const currentQty = Number.parseFloat(holding[0].totalQuantity);
+          const currentInvested = Number.parseFloat(
+            holding[0].totalInvestedAmount
+          );
+          const avgBuyPrice = Number.parseFloat(
+            holding[0].averageBuyPrice || "0"
+          );
+
+          const newQty = currentQty + quantityNum;
+          const restoredInvestedAmount = avgBuyPrice * quantityNum;
+          const newInvested = currentInvested + restoredInvestedAmount;
+
+          const realizedGain = amountNum - restoredInvestedAmount;
+          const currentRealizedGain = Number.parseFloat(
+            holding[0].realizedGainLoss || "0"
+          );
+
+          await db
+            .update(investmentHoldings)
+            .set({
+              totalQuantity: newQty.toFixed(QUANTITY_DECIMALS),
+              totalInvestedAmount: newInvested.toFixed(AMOUNT_DECIMALS),
+              realizedGainLoss: (currentRealizedGain - realizedGain).toFixed(
+                AMOUNT_DECIMALS
+              ),
+              updatedAt: new Date(),
+            })
+            .where(eq(investmentHoldings.holdingId, holding[0].holdingId));
+        }
+        // For DIVIDEND, BONUS, SPLIT - no holding changes needed
+      }
     }
 
     // If this is a transfer transaction, delete both transactions
@@ -979,9 +1061,29 @@ export const transactionMutations: Pick<
 
     // If this is a recurring transaction, handle the recurring pattern
     if (transaction.isRecurring && transaction.recurringPatternId) {
-      // Check if this is a generated transaction or the initial one
-      if (transaction.isRecurringGenerated) {
-        // This is a generated transaction - update the pattern's generated count
+      // Count how many transactions are linked to this pattern
+      const linkedTransactions = await db
+        .select()
+        .from(transactions)
+        .where(
+          and(
+            eq(transactions.recurringPatternId, transaction.recurringPatternId),
+            eq(transactions.userId, user.id)
+          )
+        );
+
+      if (linkedTransactions.length === 1) {
+        // This is the only transaction linked to this pattern - delete the pattern
+        await db
+          .delete(recurringPatterns)
+          .where(
+            and(
+              eq(recurringPatterns.patternId, transaction.recurringPatternId),
+              eq(recurringPatterns.userId, user.id)
+            )
+          );
+      } else {
+        // Multiple transactions exist - update the pattern intuitively
         const pattern = await db
           .select()
           .from(recurringPatterns)
@@ -994,57 +1096,56 @@ export const transactionMutations: Pick<
           .limit(1);
 
         if (pattern[0]) {
+          // Decrement the generated count
           const newCount = Math.max(0, pattern[0].generatedCount - 1);
+
+          // Check if the deleted transaction was the most recent one
+          const transactionDate = new Date(transaction.transactionDateTime);
+          const currentLastGenerated = pattern[0].lastGeneratedDate
+            ? new Date(pattern[0].lastGeneratedDate)
+            : null;
+
+          const updateData: {
+            generatedCount: number;
+            updatedAt: Date;
+            lastGeneratedDate?: Date | null;
+          } = {
+            generatedCount: newCount,
+            updatedAt: new Date(),
+          };
+
+          // If deleting the most recent transaction, find the new most recent one
+          if (
+            currentLastGenerated &&
+            transactionDate.getTime() === currentLastGenerated.getTime()
+          ) {
+            // Find the most recent remaining transaction
+            const remainingTransactions = linkedTransactions
+              .filter((t) => t.transactionId !== transactionId)
+              .sort(
+                (a, b) =>
+                  new Date(b.transactionDateTime).getTime() -
+                  new Date(a.transactionDateTime).getTime()
+              );
+
+            if (remainingTransactions.length > 0) {
+              updateData.lastGeneratedDate = new Date(
+                remainingTransactions[0].transactionDateTime
+              );
+            } else {
+              updateData.lastGeneratedDate = null;
+            }
+          }
+
           await db
             .update(recurringPatterns)
-            .set({
-              generatedCount: newCount,
-              updatedAt: new Date(),
-            })
+            .set(updateData)
             .where(
               and(
                 eq(recurringPatterns.patternId, transaction.recurringPatternId),
                 eq(recurringPatterns.userId, user.id)
               )
             );
-        }
-      } else {
-        // This is the initial transaction - check if there are other generated transactions
-        const generatedTransactions = await db
-          .select()
-          .from(transactions)
-          .where(
-            and(
-              eq(
-                transactions.recurringPatternId,
-                transaction.recurringPatternId
-              ),
-              eq(transactions.isRecurringGenerated, true),
-              eq(transactions.userId, user.id)
-            )
-          )
-          .limit(1);
-
-        if (generatedTransactions.length === 0) {
-          // No generated transactions exist, safe to delete the pattern
-          await db
-            .delete(recurringPatterns)
-            .where(
-              and(
-                eq(recurringPatterns.patternId, transaction.recurringPatternId),
-                eq(recurringPatterns.userId, user.id)
-              )
-            );
-        } else {
-          // Generated transactions exist, just unlink this transaction
-          // The pattern will remain for future generations
-          await db
-            .update(transactions)
-            .set({
-              recurringPatternId: null,
-              isRecurringGenerated: false,
-            })
-            .where(eq(transactions.transactionId, transactionId));
         }
       }
     }
