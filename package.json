@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "npm run codegen && tsc",
+    "build": "npm run codegen && tsc && tsc-alias",
     "start": "node dist/index.js",
     "codegen": "graphql-codegen --config codegen.ts",
     "codegen:watch": "graphql-codegen --config codegen.ts --watch",
@@ -37,6 +37,7 @@
     "lefthook": "^2.0.2",
     "lint-staged": "^16.2.6",
     "pino-pretty": "^13.1.2",
+    "tsc-alias": "^1.8.16",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3",
     "ultracite": "^6.1.0"
