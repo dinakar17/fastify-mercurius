@@ -1,8 +1,8 @@
 import { and, desc, eq, inArray, type SQL } from "drizzle-orm";
 import { GraphQLError } from "graphql";
-import { categories, recurringPatterns } from "@/db/schema";
 import type { QueryResolvers } from "@/generated/graphql";
 import type { MercuriusContext } from "@/types";
+import { categories, recurringPatterns } from "../../db/schema";
 
 const DEFAULT_PATTERN_LIMIT = 100;
 const END_OF_MONTH_HOURS = 23;

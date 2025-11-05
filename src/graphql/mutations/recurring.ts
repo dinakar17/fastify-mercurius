@@ -1,11 +1,11 @@
 import { and, eq } from "drizzle-orm";
 import { GraphQLError } from "graphql";
+import type { MutationResolvers } from "@/generated/graphql";
 import {
   categories,
   customTransactionNames,
   recurringPatterns,
-} from "@/db/schema";
-import type { MutationResolvers } from "@/generated/graphql";
+} from "../../db/schema";
 
 const DAYS_IN_WEEK = 7;
 
