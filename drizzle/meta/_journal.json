@@ -50,6 +50,13 @@
       "when": 1762116292997,
       "tag": "0006_eager_gauntlet",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1762282515314,
+      "tag": "0007_bizarre_warbird",
+      "breakpoints": true
     }
   ]
 }

@@ -131,11 +131,14 @@ const findOrCreateCustomName = async (
 const DAYS_IN_WEEK = 7;
 
 // Helper function to calculate next due date based on frequency
+// Maintains the same day from the start date regardless of when payment is made
 const calculateNextDueDate = (
   startDate: Date,
-  frequency: "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY"
+  frequency: "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY",
+  fromDate?: Date
 ): Date => {
-  const next = new Date(startDate);
+  const baseDate = fromDate ?? startDate;
+  const next = new Date(baseDate);
 
   switch (frequency) {
     case "DAILY": {
@@ -143,15 +146,38 @@ const calculateNextDueDate = (
       break;
     }
     case "WEEKLY": {
+      // Maintain the same day of the week as startDate
       next.setDate(next.getDate() + DAYS_IN_WEEK);
       break;
     }
     case "MONTHLY": {
+      // Maintain the same day of the month as startDate
+      const targetDay = startDate.getDate();
       next.setMonth(next.getMonth() + 1);
+
+      // Handle cases where target day doesn't exist in next month (e.g., Jan 31 -> Feb)
+      const maxDayInMonth = new Date(
+        next.getFullYear(),
+        next.getMonth() + 1,
+        0
+      ).getDate();
+      next.setDate(Math.min(targetDay, maxDayInMonth));
       break;
     }
     case "YEARLY": {
+      // Maintain the same day and month as startDate
+      const targetDay = startDate.getDate();
+      const targetMonth = startDate.getMonth();
       next.setFullYear(next.getFullYear() + 1);
+      next.setMonth(targetMonth);
+
+      // Handle leap year edge cases (e.g., Feb 29)
+      const maxDayInMonth = new Date(
+        next.getFullYear(),
+        targetMonth + 1,
+        0
+      ).getDate();
+      next.setDate(Math.min(targetDay, maxDayInMonth));
       break;
     }
     default: {
@@ -225,30 +251,44 @@ const handleRecurringPattern = async (
     const currentCount = existingPattern[0].generatedCount;
     const newCount = currentCount + 1;
 
-    // Only update lastGeneratedDate if this transaction is more recent
-    const currentLastGenerated = existingPattern[0].lastGeneratedDate;
-    const shouldUpdateLastGenerated =
-      !currentLastGenerated ||
-      transactionDateTime > new Date(currentLastGenerated);
+    const currentStartDate = new Date(existingPattern[0].startDate);
+    const currentLastGenerated = existingPattern[0].lastGeneratedDate
+      ? new Date(existingPattern[0].lastGeneratedDate)
+      : null;
 
-    // Calculate nextDueDate from the pattern's CURRENT nextDueDate, not from transaction date
-    // This keeps the schedule consistent regardless of when user actually pays
-    const currentNextDue = new Date(existingPattern[0].nextDueDate);
-    const newNextDueDate = calculateNextDueDate(currentNextDue, frequency);
+    // Update startDate if this transaction is earlier than the current startDate
+    const shouldUpdateStartDate = transactionDateTime < currentStartDate;
+
+    // Only update lastGeneratedDate and nextDueDate if this transaction is the most recent
+    const shouldUpdateLastGenerated =
+      !currentLastGenerated || transactionDateTime > currentLastGenerated;
 
     const updateData: {
       generatedCount: number;
       updatedAt: Date;
+      startDate?: Date;
       lastGeneratedDate?: Date;
-      nextDueDate: Date;
+      nextDueDate?: Date;
     } = {
       generatedCount: newCount,
-      nextDueDate: newNextDueDate, // Always update to next scheduled date
       updatedAt: new Date(),
     };
 
+    // Update startDate if this is an earlier transaction
+    if (shouldUpdateStartDate) {
+      updateData.startDate = transactionDateTime;
+    }
+
+    // Only update lastGeneratedDate and nextDueDate if this is the most recent transaction
     if (shouldUpdateLastGenerated) {
       updateData.lastGeneratedDate = transactionDateTime;
+      // Calculate nextDueDate from the pattern's startDate to maintain the same billing day
+      // Use the pattern's current nextDueDate as the base to keep the schedule consistent
+      updateData.nextDueDate = calculateNextDueDate(
+        currentStartDate,
+        frequency,
+        new Date(existingPattern[0].nextDueDate)
+      );
     }
 
     await db
@@ -328,6 +368,12 @@ const updateAccountBalance = async (
     throw new GraphQLError("Account not found", {
       extensions: { code: "ACCOUNT_NOT_FOUND" },
     });
+  }
+
+  // Check if transaction is before the manual balance checkpoint
+  // If so, don't update the balance
+  if (transactionDateTime < account.manualBalanceUpdatedAt) {
+    return;
   }
 
   const currentBalance = Number.parseFloat(account.currentBalance);
@@ -810,8 +856,11 @@ export const transactionMutations: Pick<
       });
     }
 
+    const isRecurringTransaction =
+      Boolean(input.isRecurring) && input.recurringFrequency;
+
     // Handle recurring pattern if isRecurring is enabled
-    if (input.isRecurring && input.recurringFrequency) {
+    if (isRecurringTransaction) {
       await handleRecurringPattern(db, {
         userId: user.id,
         accountId: input.accountId,
@@ -1099,39 +1148,64 @@ export const transactionMutations: Pick<
           // Decrement the generated count
           const newCount = Math.max(0, pattern[0].generatedCount - 1);
 
-          // Check if the deleted transaction was the most recent one
           const transactionDate = new Date(transaction.transactionDateTime);
+          const currentStartDate = new Date(pattern[0].startDate);
           const currentLastGenerated = pattern[0].lastGeneratedDate
             ? new Date(pattern[0].lastGeneratedDate)
             : null;
 
+          // Get remaining transactions (excluding the one being deleted)
+          const remainingTransactions = linkedTransactions
+            .filter((t) => t.transactionId !== transactionId)
+            .sort(
+              (a, b) =>
+                new Date(a.transactionDateTime).getTime() -
+                new Date(b.transactionDateTime).getTime()
+            );
+
           const updateData: {
             generatedCount: number;
             updatedAt: Date;
+            startDate?: Date;
             lastGeneratedDate?: Date | null;
+            nextDueDate?: Date;
           } = {
             generatedCount: newCount,
             updatedAt: new Date(),
           };
 
-          // If deleting the most recent transaction, find the new most recent one
-          if (
-            currentLastGenerated &&
-            transactionDate.getTime() === currentLastGenerated.getTime()
-          ) {
-            // Find the most recent remaining transaction
-            const remainingTransactions = linkedTransactions
-              .filter((t) => t.transactionId !== transactionId)
-              .sort(
-                (a, b) =>
-                  new Date(b.transactionDateTime).getTime() -
-                  new Date(a.transactionDateTime).getTime()
-              );
+          // Check if the deleted transaction was the earliest one
+          const isEarliestTransaction =
+            transactionDate.getTime() === currentStartDate.getTime();
 
+          // Check if the deleted transaction was the most recent one
+          const isMostRecentTransaction =
+            currentLastGenerated &&
+            transactionDate.getTime() === currentLastGenerated.getTime();
+
+          // Update startDate if we deleted the earliest transaction
+          if (isEarliestTransaction && remainingTransactions.length > 0) {
+            updateData.startDate = new Date(
+              remainingTransactions[0].transactionDateTime
+            );
+          }
+
+          // Update lastGeneratedDate and nextDueDate if we deleted the most recent transaction
+          if (isMostRecentTransaction) {
             if (remainingTransactions.length > 0) {
-              updateData.lastGeneratedDate = new Date(
-                remainingTransactions[0].transactionDateTime
-              );
+              const newMostRecent = remainingTransactions.at(-1);
+              if (newMostRecent) {
+                updateData.lastGeneratedDate = new Date(
+                  newMostRecent.transactionDateTime
+                );
+                // Calculate nextDueDate from the pattern's startDate to maintain the same billing day
+                // Use the new most recent transaction date as the base
+                updateData.nextDueDate = calculateNextDueDate(
+                  updateData.startDate || currentStartDate,
+                  pattern[0].frequency,
+                  new Date(newMostRecent.transactionDateTime)
+                );
+              }
             } else {
               updateData.lastGeneratedDate = null;
             }

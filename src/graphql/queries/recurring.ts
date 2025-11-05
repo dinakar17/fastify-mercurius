@@ -231,7 +231,7 @@ export const recurringQueries: Pick<
 
   getMonthlyRecurringPatterns: async (
     _,
-    { year, month }: { year: number; month: number },
+    { year, month }: { year?: number; month?: number },
     { db, user }: MercuriusContext
   ) => {
     if (!user) {
@@ -240,18 +240,22 @@ export const recurringQueries: Pick<
       });
     }
 
+    // Default to current month if not provided
+    const now = new Date();
+    const targetYear = year ?? now.getFullYear();
+    const targetMonth = month ?? now.getMonth() + 1;
+
     // Calculate month boundaries
-    const startOfMonth = new Date(year, month - 1, 1);
+    const startOfMonth = new Date(targetYear, targetMonth - 1, 1);
     const endOfMonth = new Date(
-      year,
-      month,
+      targetYear,
+      targetMonth,
       0,
       END_OF_MONTH_HOURS,
       END_OF_MONTH_MINUTES,
       END_OF_MONTH_SECONDS,
       END_OF_MONTH_MILLISECONDS
     );
-    const now = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
 
     // Fetch all active recurring patterns for the user

@@ -107,4 +107,75 @@ export const loaders: MercuriusLoaders = {
       );
     },
   },
+
+  RecurringPattern: {
+    async account(queries, { app }) {
+      const accountIds = queries.map(({ obj }) => obj.accountId);
+
+      const allAccounts = await app.db.query.accounts.findMany({
+        where: inArray(accounts.accountId, accountIds),
+      });
+
+      const accountsById = new Map(
+        allAccounts.map((account) => [account.accountId, account])
+      );
+
+      return accountIds.map((id) => {
+        const account = accountsById.get(id);
+        if (!account) {
+          throw new Error(`Account with ID ${id} not found`);
+        }
+        return account;
+      });
+    },
+
+    async category(queries, { app }) {
+      const categoryIds = queries.map(({ obj }) => obj.categoryId);
+
+      const allCategories = await app.db.query.categories.findMany({
+        where: inArray(categories.categoryId, categoryIds),
+      });
+
+      const categoriesById = new Map(
+        allCategories.map((category) => [category.categoryId, category])
+      );
+
+      return categoryIds.map((id) => {
+        const category = categoriesById.get(id);
+        if (!category) {
+          throw new Error(`Category with ID ${id} not found`);
+        }
+        return category;
+      });
+    },
+
+    async customName(queries, { app }) {
+      const customNameIds = queries
+        .map(({ obj }) => obj.customNameId)
+        .filter((id): id is string => id !== null && id !== undefined);
+
+      if (customNameIds.length === 0) {
+        return queries.map(() => null);
+      }
+
+      const allCustomNames = await app.db.query.customTransactionNames.findMany(
+        {
+          where: inArray(customTransactionNames.customNameId, customNameIds),
+        }
+      );
+
+      const customNamesById = new Map(
+        allCustomNames.map((customName) => [
+          customName.customNameId,
+          customName,
+        ])
+      );
+
+      return queries.map(({ obj }) =>
+        obj.customNameId
+          ? (customNamesById.get(obj.customNameId) ?? null)
+          : null
+      );
+    },
+  },
 };
