@@ -22,6 +22,7 @@ type AggregationOptions = {
   filters: TotalsFilterInput | null | undefined;
   groupBy: GroupByDimension;
   timeBucket: TimeBucket;
+  limit?: number;
 };
 
 type MonthRange = {
@@ -117,7 +118,12 @@ export const aggregateTotals = (
 const aggregateForPeriod = (
   options: AggregationOptions
 ): Promise<TotalResult[]> => {
-  const { groupBy } = options;
+  const { groupBy, limit } = options;
+
+  // If limit is specified but no groupBy, ignore the limit (can't order without grouping)
+  if (limit && groupBy === "NONE") {
+    console.warn("Limit is ignored when groupBy is NONE");
+  }
 
   switch (groupBy) {
     case "CATEGORY":
@@ -227,16 +233,23 @@ export const aggregateWithoutGrouping = async (
 export const aggregateByCategory = async (
   options: AggregationOptions
 ): Promise<TotalResult[]> => {
-  const { db, conditions, startDate, endDate, filters } = options;
+  const { db, conditions, startDate, endDate, filters, limit } = options;
 
-  const result = await db
+  let query = db
     .select({
       total: sql<string>`COALESCE(SUM(${transactions.amount}), '0')`,
       categoryId: transactions.categoryId,
     })
     .from(transactions)
     .where(and(...conditions))
-    .groupBy(transactions.categoryId);
+    .groupBy(transactions.categoryId)
+    .orderBy(sql`COALESCE(SUM(${transactions.amount}), '0') DESC`);
+
+  if (limit) {
+    query = query.limit(limit) as typeof query;
+  }
+
+  const result = await query;
 
   const categoryIds = result
     .map((r) => r.categoryId)
@@ -284,16 +297,23 @@ export const aggregateByCategory = async (
 export const aggregateByCustomName = async (
   options: AggregationOptions
 ): Promise<TotalResult[]> => {
-  const { db, conditions, startDate, endDate, filters } = options;
+  const { db, conditions, startDate, endDate, filters, limit } = options;
 
-  const result = await db
+  let query = db
     .select({
       total: sql<string>`COALESCE(SUM(${transactions.amount}), '0')`,
       customNameId: transactions.customNameId,
     })
     .from(transactions)
     .where(and(...conditions))
-    .groupBy(transactions.customNameId);
+    .groupBy(transactions.customNameId)
+    .orderBy(sql`COALESCE(SUM(${transactions.amount}), '0') DESC`);
+
+  if (limit) {
+    query = query.limit(limit) as typeof query;
+  }
+
+  const result = await query;
 
   const customNameIds = result
     .map((r) => r.customNameId)
@@ -343,16 +363,23 @@ export const aggregateByCustomName = async (
 export const aggregateByAccount = async (
   options: AggregationOptions
 ): Promise<TotalResult[]> => {
-  const { db, conditions, startDate, endDate, filters } = options;
+  const { db, conditions, startDate, endDate, filters, limit } = options;
 
-  const result = await db
+  let query = db
     .select({
       total: sql<string>`COALESCE(SUM(${transactions.amount}), '0')`,
       accountId: transactions.accountId,
     })
     .from(transactions)
     .where(and(...conditions))
-    .groupBy(transactions.accountId);
+    .groupBy(transactions.accountId)
+    .orderBy(sql`COALESCE(SUM(${transactions.amount}), '0') DESC`);
+
+  if (limit) {
+    query = query.limit(limit) as typeof query;
+  }
+
+  const result = await query;
 
   const accountIds = result.map((r) => r.accountId);
 

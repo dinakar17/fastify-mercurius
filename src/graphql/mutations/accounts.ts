@@ -1,4 +1,4 @@
-import { and, eq } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { GraphQLError } from "graphql";
 import type * as schema from "@/db/schema";
@@ -36,6 +36,20 @@ export const accountMutations: Pick<
       });
     }
 
+    // Check if this is the first account in this group for the user
+    const existingAccountsInGroup = await db
+      .select()
+      .from(accounts)
+      .where(
+        and(
+          eq(accounts.userId, user.id),
+          eq(accounts.accountGroup, input.accountGroup)
+        )
+      )
+      .limit(1);
+
+    const isFirstInGroup = existingAccountsInGroup.length === 0;
+
     const newAccount = await db
       .insert(accounts)
       .values({
@@ -48,6 +62,7 @@ export const accountMutations: Pick<
         currentBalance: input.initialBalance || "0.00",
         logoUrl: input.logoUrl,
         creditLimit: input.creditLimit,
+        isDefault: isFirstInGroup, // Set as default if first in group
       })
       .returning();
 
@@ -77,6 +92,34 @@ export const accountMutations: Pick<
     // Verify account ownership
     await verifyAccountOwnership(db, accountId, user.id);
 
+    // Small helper: unset other defaults in same group
+    const unsetOtherDefaults = async (
+      group: (typeof accounts.$inferSelect)["accountGroup"]
+    ) => {
+      await db
+        .update(accounts)
+        .set({ isDefault: false })
+        .where(
+          and(
+            eq(accounts.userId, user.id),
+            eq(accounts.accountGroup, group),
+            sql`${accounts.accountId} != ${accountId}`
+          )
+        );
+    };
+
+    // Small helper: get account group
+    const getAccountGroup = async (): Promise<
+      (typeof accounts.$inferSelect)["accountGroup"] | undefined
+    > => {
+      const existing = await db
+        .select()
+        .from(accounts)
+        .where(eq(accounts.accountId, accountId))
+        .limit(1);
+      return existing[0]?.accountGroup;
+    };
+
     // Build update object
     const updates: Partial<typeof accounts.$inferInsert> & {
       updatedAt: Date;
@@ -102,6 +145,16 @@ export const accountMutations: Pick<
     }
     if (input.isDefault !== null) {
       updates.isDefault = input.isDefault;
+
+      // If setting this account as default, unset isDefault on other accounts
+      // in the same accountGroup for this user (exclude this accountId).
+      if (input.isDefault === true) {
+        const targetGroup = await getAccountGroup();
+
+        if (targetGroup) {
+          await unsetOtherDefaults(targetGroup);
+        }
+      }
     }
 
     // Update balance if provided

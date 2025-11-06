@@ -1,8 +1,8 @@
-import { eq, gte, inArray, lte, type SQL } from "drizzle-orm";
+import { and, eq, gte, inArray, lte, or, type SQL, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { GraphQLError } from "graphql";
 import type * as schema from "@/db/schema";
-import { categories, transactions } from "../../db/schema";
+import { accounts, categories, transactions } from "../../db/schema";
 import type {
   QueryResolvers,
   TotalsFilterInput,
@@ -68,6 +68,7 @@ export const insightQueries: Pick<QueryResolvers, "getMyTotals"> = {
       filters,
       groupBy = "NONE",
       timeBucket = "NONE",
+      limit,
     } = input;
 
     // Parse dates
@@ -87,6 +88,40 @@ export const insightQueries: Pick<QueryResolvers, "getMyTotals"> = {
       lte(transactions.transactionDateTime, end),
     ];
 
+    // Handle transfer transactions carefully:
+    // Exclude all transfers EXCEPT PREPAID→POSTPAID (bill payments)
+    //
+    // Transfer scenarios:
+    // - PREPAID→POSTPAID: Bill payments (real expense) - INCLUDE
+    // - PREPAID→PREPAID: Internal movements - EXCLUDE
+    // - POSTPAID→PREPAID: Debt payments - EXCLUDE
+    // - Others: Internal movements - EXCLUDE
+    //
+    // Implementation: Use a subquery to check if:
+    // 1. Transaction is NOT a transfer, OR
+    // 2. Transaction IS a transfer from PREPAID account to a POSTPAID account
+    const transferFilter = or(
+      eq(transactions.isTransfer, false),
+      and(
+        eq(transactions.isTransfer, true),
+        sql`EXISTS (
+          SELECT 1 FROM ${accounts} source_acc
+          WHERE source_acc.account_id = ${transactions.accountId}
+          AND source_acc.account_group = 'PREPAID'
+          AND EXISTS (
+            SELECT 1 FROM ${transactions} linked_txn
+            INNER JOIN ${accounts} dest_acc ON dest_acc.account_id = linked_txn.account_id
+            WHERE linked_txn.transaction_id = ${transactions.linkedTransactionId}
+            AND dest_acc.account_group = 'POSTPAID'
+          )
+        )`
+      )
+    );
+
+    if (transferFilter) {
+      conditions.push(transferFilter);
+    }
+
     // Filter by account IDs if provided
     if (filters?.accountIds && filters.accountIds.length > 0) {
       conditions.push(inArray(transactions.accountId, filters.accountIds));
@@ -104,6 +139,7 @@ export const insightQueries: Pick<QueryResolvers, "getMyTotals"> = {
       filters,
       groupBy: groupBy || "NONE",
       timeBucket: timeBucket || "NONE",
+      limit: limit ?? undefined,
     });
   },
 };

@@ -167,6 +167,7 @@ export type GetTotalsInput = {
   endDate: Scalars['String']['input'];
   filters?: InputMaybe<TotalsFilterInput>;
   groupBy?: InputMaybe<GroupByDimension>;
+  limit?: InputMaybe<Scalars['Int']['input']>;
   startDate: Scalars['String']['input'];
   timeBucket?: InputMaybe<TimeBucket>;
 };

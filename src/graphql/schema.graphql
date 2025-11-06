@@ -549,6 +549,7 @@ input GetTotalsInput {
   filters: TotalsFilterInput
   groupBy: GroupByDimension # How to group the results (account, category, etc.)
   timeBucket: TimeBucket # How to bucket by time (none or month)
+  limit: Int # Optional: limit results (only applies when groupBy is set, orders by total descending)
 }
 
 type TotalMetadata {
