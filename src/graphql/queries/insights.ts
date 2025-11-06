@@ -1,14 +1,57 @@
 import { eq, gte, inArray, lte, type SQL } from "drizzle-orm";
+import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { GraphQLError } from "graphql";
+import type * as schema from "@/db/schema";
 import { categories, transactions } from "../../db/schema";
-import type { QueryResolvers } from "../../generated/graphql";
-import {
-  aggregateByAccount,
-  aggregateByCategory,
-  aggregateByCustomName,
-  aggregateWithoutGrouping,
-  getPrepaidAccountIds,
-} from "../totals-helpers";
+import type {
+  QueryResolvers,
+  TotalsFilterInput,
+} from "../../generated/graphql";
+import { aggregateTotals } from "../totals-helpers";
+
+// Helper to build filter conditions
+const buildFilterConditions = async (
+  db: PostgresJsDatabase<typeof schema>,
+  conditions: SQL[],
+  filters: TotalsFilterInput | null | undefined
+): Promise<void> => {
+  if (filters?.transactionType) {
+    conditions.push(eq(transactions.transactionType, filters.transactionType));
+  }
+
+  if (filters?.isInvestment !== undefined && filters?.isInvestment !== null) {
+    conditions.push(eq(transactions.isInvestment, filters.isInvestment));
+  }
+
+  if (filters?.isRecurring !== undefined && filters?.isRecurring !== null) {
+    conditions.push(eq(transactions.isRecurring, filters.isRecurring));
+  }
+
+  if (filters?.categoryId) {
+    conditions.push(eq(transactions.categoryId, filters.categoryId));
+  }
+
+  if (
+    filters?.categoryNumber !== undefined &&
+    filters?.categoryNumber !== null
+  ) {
+    const categoryResult = await db
+      .select({ categoryId: categories.categoryId })
+      .from(categories)
+      .where(eq(categories.categoryNumber, filters.categoryNumber))
+      .limit(1);
+
+    if (categoryResult[0]) {
+      conditions.push(
+        eq(transactions.categoryId, categoryResult[0].categoryId)
+      );
+    }
+  }
+
+  if (filters?.customNameId) {
+    conditions.push(eq(transactions.customNameId, filters.customNameId));
+  }
+};
 
 export const insightQueries: Pick<QueryResolvers, "getMyTotals"> = {
   // Get transaction totals with flexible filtering and grouping
@@ -19,7 +62,13 @@ export const insightQueries: Pick<QueryResolvers, "getMyTotals"> = {
       });
     }
 
-    const { startDate, endDate, filters, groupBy = "NONE" } = input;
+    const {
+      startDate,
+      endDate,
+      filters,
+      groupBy = "NONE",
+      timeBucket = "NONE",
+    } = input;
 
     // Parse dates
     const start = new Date(startDate);
@@ -38,73 +87,23 @@ export const insightQueries: Pick<QueryResolvers, "getMyTotals"> = {
       lte(transactions.transactionDateTime, end),
     ];
 
-    // Get PREPAID account IDs and add to conditions
-    const prepaidAccountIds = await getPrepaidAccountIds(
+    // Filter by account IDs if provided
+    if (filters?.accountIds && filters.accountIds.length > 0) {
+      conditions.push(inArray(transactions.accountId, filters.accountIds));
+    }
+
+    // Apply additional filters
+    await buildFilterConditions(db, conditions, filters);
+
+    // Use the new unified aggregation function
+    return aggregateTotals({
       db,
-      user.id,
-      filters?.accountIds
-    );
-
-    if (prepaidAccountIds.length === 0) {
-      return [];
-    }
-
-    conditions.push(inArray(transactions.accountId, prepaidAccountIds));
-
-    // Apply remaining filters
-    if (filters?.transactionType) {
-      conditions.push(
-        eq(transactions.transactionType, filters.transactionType)
-      );
-    }
-
-    if (filters?.isInvestment !== undefined && filters?.isInvestment !== null) {
-      conditions.push(eq(transactions.isInvestment, filters.isInvestment));
-    }
-
-    if (filters?.isRecurring !== undefined && filters?.isRecurring !== null) {
-      conditions.push(eq(transactions.isRecurring, filters.isRecurring));
-    }
-
-    if (filters?.categoryId) {
-      conditions.push(eq(transactions.categoryId, filters.categoryId));
-    }
-
-    if (
-      filters?.categoryNumber !== undefined &&
-      filters?.categoryNumber !== null
-    ) {
-      const categoryResult = await db
-        .select({ categoryId: categories.categoryId })
-        .from(categories)
-        .where(eq(categories.categoryNumber, filters.categoryNumber))
-        .limit(1);
-
-      if (!categoryResult[0]) {
-        return [];
-      }
-
-      conditions.push(
-        eq(transactions.categoryId, categoryResult[0].categoryId)
-      );
-    }
-
-    if (filters?.customNameId) {
-      conditions.push(eq(transactions.customNameId, filters.customNameId));
-    }
-
-    // Aggregate based on groupBy option
-    const aggregationOptions = { db, conditions, startDate, endDate, filters };
-
-    switch (groupBy) {
-      case "CATEGORY":
-        return aggregateByCategory(aggregationOptions);
-      case "CUSTOM_NAME":
-        return aggregateByCustomName(aggregationOptions);
-      case "ACCOUNT":
-        return aggregateByAccount(aggregationOptions);
-      default:
-        return aggregateWithoutGrouping(aggregationOptions);
-    }
+      conditions,
+      startDate,
+      endDate,
+      filters,
+      groupBy: groupBy || "NONE",
+      timeBucket: timeBucket || "NONE",
+    });
   },
 };

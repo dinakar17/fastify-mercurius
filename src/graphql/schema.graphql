@@ -477,11 +477,50 @@ type MonthlyRecurringPatternsResponse {
 # TOTALS & AGGREGATION TYPES
 # ===========================
 
-enum GroupByOption {
-  NONE
-  CATEGORY
-  CUSTOM_NAME
-  ACCOUNT
+# The getMyTotals query supports flexible data aggregation with two dimensions:
+# 1. groupBy (GroupByDimension): How to split the data
+#    - NONE: Return single total for the entire period
+#    - ACCOUNT: Split by accounts (useful for account comparison charts)
+#    - CATEGORY: Split by categories (useful for spending breakdown)
+#    - CUSTOM_NAME: Split by custom transaction names
+# 
+# 2. timeBucket (TimeBucket): How to split by time
+#    - NONE: Use the full date range (startDate to endDate)
+#    - MONTH: Split the date range into monthly buckets
+# 
+# Examples:
+# - Array split by accounts (fixed dates):
+#   { groupBy: ACCOUNT, timeBucket: NONE, startDate: "2024-01", endDate: "2024-12" }
+#   Returns: [{ account: A, total: 100 }, { account: B, total: 200 }]
+# 
+# - Array split by categories (fixed dates):
+#   { groupBy: CATEGORY, timeBucket: NONE, startDate: "2024-01", endDate: "2024-12" }
+#   Returns: [{ category: Food, total: 500 }, { category: Transport, total: 300 }]
+# 
+# - Array split by months (fixed dates divided by months):
+#   { groupBy: NONE, timeBucket: MONTH, startDate: "2024-01", endDate: "2024-12" }
+#   Returns: [{ month: "2024-01", total: 1000 }, { month: "2024-02", total: 1200 }, ...]
+# 
+# - Array of [Array split by accounts] split by months:
+#   { groupBy: ACCOUNT, timeBucket: MONTH, startDate: "2024-01", endDate: "2024-12" }
+#   Returns: [
+#     { account: A, month: "2024-01", total: 50 },
+#     { account: B, month: "2024-01", total: 100 },
+#     { account: A, month: "2024-02", total: 75 },
+#     { account: B, month: "2024-02", total: 150 },
+#     ...
+#   ]
+
+enum GroupByDimension {
+  NONE         # No grouping, return single total
+  ACCOUNT      # Split by accounts
+  CATEGORY     # Split by categories
+  CUSTOM_NAME  # Split by custom names
+}
+
+enum TimeBucket {
+  NONE   # No time bucketing, use full date range
+  MONTH  # Split by months
 }
 
 input TotalsFilterInput {
@@ -508,21 +547,22 @@ input GetTotalsInput {
   startDate: String! # ISO 8601 date string
   endDate: String! # ISO 8601 date string
   filters: TotalsFilterInput
-  groupBy: GroupByOption # How to split the results
+  groupBy: GroupByDimension # How to group the results (account, category, etc.)
+  timeBucket: TimeBucket # How to bucket by time (none or month)
 }
 
 type TotalMetadata {
-  # For bar charts - average across the queried period
-  average: String
-  
-  # For donut charts - category information
+  # For grouping by category
   category: Category
   
-  # For custom name grouping
+  # For grouping by custom name
   customName: CustomTransactionName
   
-  # For account grouping
+  # For grouping by account
   account: Account
+  
+  # For time bucketing - which month/period this result represents
+  month: String # ISO 8601 month string (YYYY-MM) when timeBucket is MONTH
 }
 
 type TotalResult {

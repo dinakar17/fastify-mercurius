@@ -166,8 +166,9 @@ export type GetRecurringPatternsInput = {
 export type GetTotalsInput = {
   endDate: Scalars['String']['input'];
   filters?: InputMaybe<TotalsFilterInput>;
-  groupBy?: InputMaybe<GroupByOption>;
+  groupBy?: InputMaybe<GroupByDimension>;
   startDate: Scalars['String']['input'];
+  timeBucket?: InputMaybe<TimeBucket>;
 };
 
 export type GetTransactionsInput = {
@@ -195,7 +196,7 @@ export type GetTransactionsInput = {
   type?: InputMaybe<TransactionFilterType>;
 };
 
-export type GroupByOption =
+export type GroupByDimension =
   | 'ACCOUNT'
   | 'CATEGORY'
   | 'CUSTOM_NAME'
@@ -428,12 +429,16 @@ export type RecurringPatternSummary = {
   upcoming: Scalars['String']['output'];
 };
 
+export type TimeBucket =
+  | 'MONTH'
+  | 'NONE';
+
 export type TotalMetadata = {
   __typename?: 'TotalMetadata';
   account?: Maybe<Account>;
-  average?: Maybe<Scalars['String']['output']>;
   category?: Maybe<Category>;
   customName?: Maybe<CustomTransactionName>;
+  month?: Maybe<Scalars['String']['output']>;
 };
 
 export type TotalResult = {
@@ -668,7 +673,7 @@ export type ResolversTypes = ResolversObject<{
   GetRecurringPatternsInput: GetRecurringPatternsInput;
   GetTotalsInput: GetTotalsInput;
   GetTransactionsInput: GetTransactionsInput;
-  GroupByOption: GroupByOption;
+  GroupByDimension: GroupByDimension;
   ID: ResolverTypeWrapper<Scalars['ID']['output']>;
   Int: ResolverTypeWrapper<Scalars['Int']['output']>;
   InvestmentAction: InvestmentAction;
@@ -685,6 +690,7 @@ export type ResolversTypes = ResolversObject<{
   RecurringPatternStatus: RecurringPatternStatus;
   RecurringPatternSummary: ResolverTypeWrapper<RecurringPatternSummary>;
   String: ResolverTypeWrapper<Scalars['String']['output']>;
+  TimeBucket: TimeBucket;
   TotalMetadata: ResolverTypeWrapper<TotalMetadata>;
   TotalResult: ResolverTypeWrapper<TotalResult>;
   TotalsFilter: ResolverTypeWrapper<TotalsFilter>;
@@ -905,9 +911,9 @@ export type RecurringPatternSummaryResolvers<ContextType = MercuriusContext, Par
 
 export type TotalMetadataResolvers<ContextType = MercuriusContext, ParentType extends ResolversParentTypes['TotalMetadata'] = ResolversParentTypes['TotalMetadata']> = ResolversObject<{
   account?: Resolver<Maybe<ResolversTypes['Account']>, ParentType, ContextType>;
-  average?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   category?: Resolver<Maybe<ResolversTypes['Category']>, ParentType, ContextType>;
   customName?: Resolver<Maybe<ResolversTypes['CustomTransactionName']>, ParentType, ContextType>;
+  month?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
 }>;
 
 export type TotalResultResolvers<ContextType = MercuriusContext, ParentType extends ResolversParentTypes['TotalResult'] = ResolversParentTypes['TotalResult']> = ResolversObject<{

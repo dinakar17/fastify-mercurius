@@ -7,7 +7,12 @@ import {
   customTransactionNames,
   transactions,
 } from "../db/schema";
-import type { TotalResult, TotalsFilterInput } from "../generated/graphql";
+import type {
+  GroupByDimension,
+  TimeBucket,
+  TotalResult,
+  TotalsFilterInput,
+} from "../generated/graphql";
 
 type AggregationOptions = {
   db: PostgresJsDatabase<typeof schema>;
@@ -15,6 +20,14 @@ type AggregationOptions = {
   startDate: string;
   endDate: string;
   filters: TotalsFilterInput | null | undefined;
+  groupBy: GroupByDimension;
+  timeBucket: TimeBucket;
+};
+
+type MonthRange = {
+  startDate: Date;
+  endDate: Date;
+  monthString: string; // YYYY-MM format
 };
 
 // Helper to get prepaid account IDs
@@ -38,6 +51,152 @@ export const getPrepaidAccountIds = async (
     .where(and(...conditions));
 
   return result.map((a) => a.accountId);
+};
+
+// Helper to generate month ranges from start to end date
+const generateMonthRanges = (startDate: Date, endDate: Date): MonthRange[] => {
+  const ranges: MonthRange[] = [];
+  const current = new Date(startDate);
+  const FIRST_DAY = 1;
+  const HOURS_MAX = 23;
+  const MINUTES_MAX = 59;
+  const SECONDS_MAX = 59;
+  const MS_MAX = 999;
+
+  current.setDate(FIRST_DAY); // Start at beginning of month
+  current.setHours(0, 0, 0, 0);
+
+  while (current <= endDate) {
+    const monthStart = new Date(current);
+    const monthEnd = new Date(current);
+    monthEnd.setMonth(monthEnd.getMonth() + 1);
+    monthEnd.setDate(0); // Last day of current month
+    monthEnd.setHours(HOURS_MAX, MINUTES_MAX, SECONDS_MAX, MS_MAX);
+
+    // Adjust first and last ranges to match actual start/end dates
+    const rangeStart =
+      monthStart < startDate ? new Date(startDate) : monthStart;
+    const rangeEnd = monthEnd > endDate ? new Date(endDate) : monthEnd;
+
+    const year = current.getFullYear();
+    const month = String(current.getMonth() + 1).padStart(2, "0");
+
+    ranges.push({
+      startDate: rangeStart,
+      endDate: rangeEnd,
+      monthString: `${year}-${month}`,
+    });
+
+    current.setMonth(current.getMonth() + 1);
+  }
+
+  return ranges;
+};
+
+// Main aggregation function that handles all combinations
+export const aggregateTotals = (
+  options: AggregationOptions
+): Promise<TotalResult[]> => {
+  const { timeBucket } = options;
+
+  // If no time bucketing, use the original date range
+  if (timeBucket === "NONE") {
+    return aggregateForPeriod(options);
+  }
+
+  // If time bucketing by month, split into month ranges
+  if (timeBucket === "MONTH") {
+    return aggregateByMonths(options);
+  }
+
+  // Default fallback
+  return aggregateForPeriod(options);
+};
+
+// Aggregate data for a single time period (no time bucketing)
+const aggregateForPeriod = (
+  options: AggregationOptions
+): Promise<TotalResult[]> => {
+  const { groupBy } = options;
+
+  switch (groupBy) {
+    case "CATEGORY":
+      return aggregateByCategory(options);
+    case "CUSTOM_NAME":
+      return aggregateByCustomName(options);
+    case "ACCOUNT":
+      return aggregateByAccount(options);
+    default:
+      return aggregateWithoutGrouping(options);
+  }
+};
+
+// Aggregate data split by months
+const aggregateByMonths = async (
+  options: AggregationOptions
+): Promise<TotalResult[]> => {
+  const { startDate, endDate, groupBy, db, conditions, filters } = options;
+
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+  const monthRanges = generateMonthRanges(start, end);
+
+  const results: TotalResult[] = [];
+
+  for (const monthRange of monthRanges) {
+    // Update conditions to use the month's date range
+    const monthConditions = conditions.map((condition) => {
+      // Replace the date conditions with the month-specific ones
+      const conditionStr = condition.toString();
+      if (
+        conditionStr.includes("transaction_date_time") &&
+        conditionStr.includes(">=")
+      ) {
+        return sql`${transactions.transactionDateTime} >= ${monthRange.startDate}`;
+      }
+      if (
+        conditionStr.includes("transaction_date_time") &&
+        conditionStr.includes("<=")
+      ) {
+        return sql`${transactions.transactionDateTime} <= ${monthRange.endDate}`;
+      }
+      return condition;
+    });
+
+    // Create new options for this month
+    const monthOptions: AggregationOptions = {
+      db,
+      conditions: monthConditions,
+      startDate: monthRange.startDate.toISOString(),
+      endDate: monthRange.endDate.toISOString(),
+      filters,
+      groupBy,
+      timeBucket: "NONE", // Don't recursively bucket
+    };
+
+    // Get results for this month
+    const monthResults = await aggregateForPeriod(monthOptions);
+
+    // Add month metadata to each result
+    for (const result of monthResults) {
+      results.push({
+        ...result,
+        metadata: result.metadata
+          ? {
+              ...result.metadata,
+              month: monthRange.monthString,
+            }
+          : {
+              category: null,
+              customName: null,
+              account: null,
+              month: monthRange.monthString,
+            },
+      });
+    }
+  }
+
+  return results;
 };
 
 // Helper to aggregate without grouping
@@ -112,9 +271,9 @@ export const aggregateByCategory = async (
               createdAt: category.createdAt.toISOString(),
               updatedAt: category.createdAt.toISOString(),
             },
-            average: null,
             customName: null,
             account: null,
+            month: null,
           }
         : null,
     };
@@ -172,8 +331,8 @@ export const aggregateByCustomName = async (
               updatedAt: customName.createdAt.toISOString(),
             },
             category: null,
-            average: null,
             account: null,
+            month: null,
           }
         : null,
     };
@@ -246,7 +405,7 @@ export const aggregateByAccount = async (
             },
             category: null,
             customName: null,
-            average: null,
+            month: null,
           }
         : null,
     };
