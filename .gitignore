@@ -66,6 +66,6 @@ node_modules
 dist
 .env
 .git
-*.md
+# *.md
 drizzle
 src/generated

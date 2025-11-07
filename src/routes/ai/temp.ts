@@ -2,8 +2,8 @@ import { openai } from "@ai-sdk/openai";
 import type { UIMessage } from "ai";
 import { convertToModelMessages, streamText } from "ai";
 import type { FastifyPluginAsync } from "fastify";
-import { CREATE_TRANSACTION_PROMPT } from "./prompts";
-import { createTransactionTool } from "./tools";
+import { COMBINED_ASSISTANT_PROMPT } from "./prompts";
+import { createTransactionTool, getFinancialInsightsTool } from "./tools";
 
 const HTTP_UNAUTHORIZED = 401;
 
@@ -30,11 +30,17 @@ const aiRoute: FastifyPluginAsync = async (fastify) => {
         request,
         reply
       ),
+      getFinancialInsights: await getFinancialInsightsTool(
+        fastify,
+        user,
+        request,
+        reply
+      ),
     };
 
     const result = streamText({
       model: openai(model),
-      system: CREATE_TRANSACTION_PROMPT,
+      system: COMBINED_ASSISTANT_PROMPT,
       messages: convertToModelMessages(messages),
       tools: dynamicTools,
     });
