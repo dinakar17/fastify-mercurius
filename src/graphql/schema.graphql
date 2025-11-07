@@ -580,7 +580,7 @@ type TotalResult {
 
 input GetPortfolioDistributionInput {
   accountIds: [ID!] # Optional: filter by specific investment accounts
-  categoryIds: [ID!] # Optional: filter by specific investment categories
+  categoryNumbers: [Int!] # Optional: filter by specific investment categories
 }
 
 type PortfolioDistributionItem {

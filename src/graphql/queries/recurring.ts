@@ -82,17 +82,11 @@ export const recurringQueries: Pick<
       accountId,
       categoryNumber,
       isActive,
-      transactionType = "DEBIT",
       limit = 100,
     } = input ?? {};
 
     // Build base conditions
     const conditions: SQL[] = [eq(recurringPatterns.userId, user.id)];
-
-    // Filter by transaction type (default is DEBIT)
-    if (transactionType) {
-      conditions.push(eq(recurringPatterns.transactionType, transactionType));
-    }
 
     // Filter by account IDs if provided
     if (accountId && accountId.length > 0) {

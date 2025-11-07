@@ -1,4 +1,4 @@
-import { and, eq, inArray, type SQL, sql } from "drizzle-orm";
+import { and, eq, gte, inArray, lte, type SQL, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import type * as schema from "@/db/schema";
 import {
@@ -149,25 +149,23 @@ const aggregateByMonths = async (
 
   const results: TotalResult[] = [];
 
+  // Extract non-date conditions (filter out the original date range conditions)
+  const baseConditions = conditions.filter((condition) => {
+    const conditionStr = condition.toString();
+    return !(
+      conditionStr.includes("transaction_date_time") &&
+      (conditionStr.includes(">=") || conditionStr.includes("<="))
+    );
+  });
+
   for (const monthRange of monthRanges) {
-    // Update conditions to use the month's date range
-    const monthConditions = conditions.map((condition) => {
-      // Replace the date conditions with the month-specific ones
-      const conditionStr = condition.toString();
-      if (
-        conditionStr.includes("transaction_date_time") &&
-        conditionStr.includes(">=")
-      ) {
-        return sql`${transactions.transactionDateTime} >= ${monthRange.startDate}`;
-      }
-      if (
-        conditionStr.includes("transaction_date_time") &&
-        conditionStr.includes("<=")
-      ) {
-        return sql`${transactions.transactionDateTime} <= ${monthRange.endDate}`;
-      }
-      return condition;
-    });
+    // Build fresh conditions with month-specific date range
+    // Use the SQL functions that match the original query format
+    const monthConditions = [
+      ...baseConditions,
+      gte(transactions.transactionDateTime, monthRange.startDate),
+      lte(transactions.transactionDateTime, monthRange.endDate),
+    ];
 
     // Create new options for this month
     const monthOptions: AggregationOptions = {

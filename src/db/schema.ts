@@ -234,6 +234,7 @@ export const customTransactionNames = pgTable(
 
     customName: varchar("custom_name", { length: 255 }).notNull(),
     customLogoUrl: varchar("custom_logo_url", { length: 500 }),
+    assetSymbol: varchar("asset_symbol", { length: 50 }), // For investment transactions
 
     usageCount: integer("usage_count").default(0).notNull(),
     lastUsedAt: timestamp("last_used_at", { withTimezone: true }),

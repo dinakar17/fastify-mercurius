@@ -151,7 +151,7 @@ export type DeleteResponse = {
 
 export type GetPortfolioDistributionInput = {
   accountIds?: InputMaybe<Array<Scalars['ID']['input']>>;
-  categoryIds?: InputMaybe<Array<Scalars['ID']['input']>>;
+  categoryNumbers?: InputMaybe<Array<Scalars['Int']['input']>>;
 };
 
 export type GetRecurringPatternsInput = {

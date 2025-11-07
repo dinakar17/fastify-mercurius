@@ -64,11 +64,22 @@ export const holdingsQueries: Pick<
       conditions.push(inArray(investmentHoldings.accountId, input.accountIds));
     }
 
-    // Filter by category IDs if provided
-    if (input?.categoryIds && input.categoryIds.length > 0) {
-      conditions.push(
-        inArray(investmentHoldings.categoryId, input.categoryIds)
-      );
+    // Filter by category numbers if provided
+    if (input?.categoryNumbers && input.categoryNumbers.length > 0) {
+      // First get category IDs from category numbers
+      const categoryResults = await db
+        .select({ categoryId: categories.categoryId })
+        .from(categories)
+        .where(inArray(categories.categoryNumber, input.categoryNumbers));
+
+      const categoryIds = categoryResults.map((c) => c.categoryId);
+
+      if (categoryIds.length > 0) {
+        conditions.push(inArray(investmentHoldings.categoryId, categoryIds));
+      } else {
+        // No matching categories found, return empty array
+        return [];
+      }
     }
 
     // Aggregate by categoryId
