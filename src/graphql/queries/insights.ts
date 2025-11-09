@@ -1,7 +1,7 @@
 import { eq, gte, inArray, lte, or, type SQL, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { GraphQLError } from "graphql";
-import type * as schema from "@/db/schema";
+import type * as schema from "../../db/schema";
 import { categories, transactions } from "../../db/schema";
 import type {
   QueryResolvers,

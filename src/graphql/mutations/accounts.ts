@@ -1,7 +1,7 @@
 import { and, eq, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { GraphQLError } from "graphql";
-import type * as schema from "@/db/schema";
+import type * as schema from "../../db/schema";
 import { accounts } from "../../db/schema";
 import type { Account, MutationResolvers } from "../../generated/graphql";
 

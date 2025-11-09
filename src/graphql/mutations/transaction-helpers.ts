@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { GraphQLError } from "graphql";
-import type * as schema from "@/db/schema";
+import type * as schema from "../../db/schema";
 import {
   accounts,
   categories,
@@ -9,7 +9,7 @@ import {
   investmentHoldings,
   recurringPatterns,
   transactions,
-} from "@/db/schema";
+} from "../../db/schema";
 
 // Constants for decimal precision
 const QUANTITY_DECIMALS = 6;

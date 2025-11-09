@@ -1,6 +1,6 @@
 import { and, eq, gte, inArray, lte, type SQL, sql } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
-import type * as schema from "@/db/schema";
+import type * as schema from "../db/schema";
 import {
   accounts,
   categories,
