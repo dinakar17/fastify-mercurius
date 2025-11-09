@@ -64,6 +64,20 @@
       "when": 1762459506416,
       "tag": "0008_adorable_vapor",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1762608419859,
+      "tag": "0009_orange_turbo",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1762611441048,
+      "tag": "0010_conscious_anthem",
+      "breakpoints": true
     }
   ]
 }

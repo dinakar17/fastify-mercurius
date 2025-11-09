@@ -12,6 +12,7 @@
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
+    "@ai-sdk/anthropic": "^2.0.41",
     "@ai-sdk/openai": "^2.0.59",
     "@fastify/cors": "^11.1.0",
     "@supabase/supabase-js": "^2.78.0",

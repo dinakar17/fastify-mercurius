@@ -87,27 +87,43 @@ export const createTransactionTool = async (
   reply: FastifyReply
 ) => {
   // Fetch context data for AI
-  const [customNames, generalCategories, investmentCategories] =
+  const [customNames, generalCategories, investmentCategories, userAccounts] =
     await Promise.all([
       getUserCustomNames(fastify, user.id),
       getCategoriesByType(fastify, "GENERAL"),
       getCategoriesByType(fastify, "INVESTMENT"),
+      fastify.db
+        .select({
+          accountId: accounts.accountId,
+          accountName: accounts.accountName,
+          accountGroup: accounts.accountGroup,
+          accountType: accounts.accountType,
+        })
+        .from(accounts)
+        .where(and(eq(accounts.userId, user.id), eq(accounts.isActive, true))),
     ]);
 
   return {
     description: `Create a financial transaction from natural language input. This tool handles:
 - Normal debit transactions (e.g., "I paid 405 rs to zomato")
 - Normal credit transactions (e.g., "I received 40 rs from my friend")
+- Credit card transactions (e.g., "I paid 500 rs on my credit card at Amazon")
 - Investment transactions (e.g., "I bought 2 kei shares at 3077 each")
 - Transfer transactions (e.g., "I transferred 10k from my sbi to hdfc account")
 
 The tool automatically:
 - Defaults to today's date if no date is specified
-- Selects the appropriate default account based on transaction type
+- Selects the appropriate default account based on transaction type:
+  * For investment transactions: Uses default INVESTMENT account
+  * For credit card/postpaid transactions: Uses default POSTPAID account
+  * For normal transactions: Uses default PREPAID account
 - Determines transaction type (DEBIT/CREDIT) from context
 - Identifies category from merchant/description
 - Handles investment transactions with quantity and price
 - Manages account transfers between user's accounts
+
+AVAILABLE USER ACCOUNTS:
+${userAccounts.map((acc) => `- ${acc.accountName} (${acc.accountGroup} - ${acc.accountType}) [ID: ${acc.accountId}]`).join("\n")}
 
 AVAILABLE CATEGORIES:
 
@@ -123,7 +139,9 @@ ${customNames.length > 0 ? customNames.map((cn) => `- "${cn.customName}"${cn.ass
 INSTRUCTIONS:
 1. For customName: Choose from existing custom names above if the merchant matches, or create a new one
 2. For assetSymbol (investments): Use the symbol from existing custom names if available, or create new
-3. For categoryNumber: REQUIRED - Choose the most appropriate category number from the lists above based on transaction type`,
+3. For categoryNumber: REQUIRED - Choose the most appropriate category number from the lists above based on transaction type
+4. For account IDs: Use the account IDs from AVAILABLE USER ACCOUNTS above when specifying accounts
+5. Set isPostpaid=true when user mentions 'credit card', 'CC', 'postpaid' or similar terms`,
     inputSchema: z.object({
       customName: z
         .string()
@@ -183,23 +201,47 @@ INSTRUCTIONS:
         .boolean()
         .optional()
         .describe("True if transferring between user's own accounts"),
-      fromAccountName: z
-        .string()
-        .optional()
-        .describe("Source account name for transfers (e.g., 'SBI', 'HDFC')"),
-      toAccountName: z
+      fromAccountId: z
         .string()
         .optional()
         .describe(
-          "Destination account name for transfers (e.g., 'SBI', 'HDFC')"
+          "Source account ID for transfers. Choose from AVAILABLE USER ACCOUNTS list above"
+        ),
+      toAccountId: z
+        .string()
+        .optional()
+        .describe(
+          "Destination account ID for transfers. Choose from AVAILABLE USER ACCOUNTS list above"
         ),
 
       // Account specification (optional - will use defaults if not provided)
-      accountName: z
+      accountId: z
         .string()
         .optional()
         .describe(
-          "Specific account name if not using default (for non-transfer transactions)"
+          "Specific account ID if not using default (for non-transfer transactions). Choose from AVAILABLE USER ACCOUNTS list above"
+        ),
+      isPostpaid: z
+        .boolean()
+        .optional()
+        .describe(
+          "True if transaction is from a credit card or any postpaid account. Use when user mentions 'credit card', 'CC', 'postpaid', or similar terms indicating postpaid payment method"
+        ),
+      isRecurring: z
+        .boolean()
+        .optional()
+        .describe(
+          "True if this is a recurring/repeating transaction. Use when user mentions 'recurring', 'subscription', 'monthly payment', 'regular payment', 'every month/week', 'bill', or similar terms indicating a repeating transaction"
+        ),
+      recurringFrequency: z
+        .enum(["DAILY", "WEEKLY", "MONTHLY", "YEARLY", "CUSTOM"])
+        .optional()
+        .describe("Frequency of recurrence. Required if isRecurring is true"),
+      customFrequencyDays: z
+        .number()
+        .optional()
+        .describe(
+          "For custom recurrence frequency, specify number of days (e.g., every 10 days). Used only if recurringFrequency is 'CUSTOM'"
         ),
     }),
     execute: async (params: {
@@ -215,28 +257,45 @@ INSTRUCTIONS:
       pricePerUnit?: string;
       investmentAction?: "BUY" | "SELL" | "DIVIDEND" | "BONUS" | "SPLIT";
       isTransfer?: boolean;
-      fromAccountName?: string;
-      toAccountName?: string;
-      accountName?: string;
+      fromAccountId?: string;
+      toAccountId?: string;
+      accountId?: string;
+      isPostpaid?: boolean;
+      isRecurring?: boolean;
+      recurringFrequency?: "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY" | "CUSTOM";
+      customFrequencyDays?: number;
     }) => {
       try {
-        // Determine transaction date
-        const transactionDateTime = params.transactionDateTime
-          ? params.transactionDateTime
-          : new Date().toISOString();
+        // Determine transaction date - if LLM provides a date, attach current time to it
+        let transactionDateTime: string;
+        if (params.transactionDateTime) {
+          // Parse the date from LLM and attach current time
+          const providedDate = new Date(params.transactionDateTime);
+          const now = new Date();
+
+          // Set the time components from current time
+          providedDate.setHours(now.getHours());
+          providedDate.setMinutes(now.getMinutes());
+          providedDate.setSeconds(now.getSeconds());
+          providedDate.setMilliseconds(now.getMilliseconds());
+
+          transactionDateTime = providedDate.toISOString();
+        } else {
+          transactionDateTime = new Date().toISOString();
+        }
 
         // Determine the account ID to use
         let accountId: string;
 
-        if (params.isTransfer && params.fromAccountName) {
-          // For transfers, find the source account
+        if (params.isTransfer && params.fromAccountId) {
+          // For transfers, validate the source account exists
           const [fromAccount] = await fastify.db
             .select()
             .from(accounts)
             .where(
               and(
                 eq(accounts.userId, user.id),
-                eq(accounts.accountName, params.fromAccountName),
+                eq(accounts.accountId, params.fromAccountId),
                 eq(accounts.isActive, true)
               )
             )
@@ -245,11 +304,33 @@ INSTRUCTIONS:
           if (!fromAccount) {
             return {
               success: false,
-              error: `Source account '${params.fromAccountName}' not found`,
+              error: `Source account with ID '${params.fromAccountId}' not found`,
             };
           }
 
           accountId = fromAccount.accountId;
+        } else if (params.accountId) {
+          // If specific account ID provided, validate it exists
+          const [specifiedAccount] = await fastify.db
+            .select()
+            .from(accounts)
+            .where(
+              and(
+                eq(accounts.userId, user.id),
+                eq(accounts.accountId, params.accountId),
+                eq(accounts.isActive, true)
+              )
+            )
+            .limit(1);
+
+          if (!specifiedAccount) {
+            return {
+              success: false,
+              error: `Account with ID '${params.accountId}' not found`,
+            };
+          }
+
+          accountId = specifiedAccount.accountId;
         } else if (params.isInvestment) {
           // For investments, use default INVESTMENT account
           const investmentAccount = await getDefaultAccountByGroup(
@@ -258,6 +339,14 @@ INSTRUCTIONS:
             "INVESTMENT"
           );
           accountId = investmentAccount.accountId;
+        } else if (params.isPostpaid) {
+          // For credit card or postpaid transactions, use default POSTPAID account
+          const postpaidAccount = await getDefaultAccountByGroup(
+            fastify,
+            user.id,
+            "POSTPAID"
+          );
+          accountId = postpaidAccount.accountId;
         } else {
           // For normal transactions, use default PREPAID account
           const defaultAccount = await getDefaultAccountByGroup(
@@ -291,17 +380,20 @@ INSTRUCTIONS:
           pricePerUnit: params.pricePerUnit,
           investmentAction: params.investmentAction,
           isTransfer: params.isTransfer,
+          isRecurring: params.isRecurring,
+          recurringFrequency: params.recurringFrequency,
+          customFrequencyDays: params.customFrequencyDays,
         };
 
         // For transfers, find the other account
-        if (params.isTransfer && params.toAccountName) {
+        if (params.isTransfer && params.toAccountId) {
           const [toAccount] = await fastify.db
             .select()
             .from(accounts)
             .where(
               and(
                 eq(accounts.userId, user.id),
-                eq(accounts.accountName, params.toAccountName),
+                eq(accounts.accountId, params.toAccountId),
                 eq(accounts.isActive, true)
               )
             )
@@ -310,7 +402,7 @@ INSTRUCTIONS:
           if (!toAccount) {
             return {
               success: false,
-              error: `Destination account '${params.toAccountName}' not found`,
+              error: `Destination account with ID '${params.toAccountId}' not found`,
             };
           }
 
@@ -342,16 +434,30 @@ INSTRUCTIONS:
         // Format success message
         let message: string;
         if (params.isInvestment) {
-          message = `Created investment transaction: ${params.investmentAction} ${params.quantity} ${params.assetSymbol} at ₹${params.pricePerUnit} each`;
+          const accountName =
+            userAccounts.find((acc) => acc.accountId === accountId)
+              ?.accountName || accountId;
+          message = `Created investment transaction in ${accountName}: ${params.investmentAction} ${params.quantity} ${params.assetSymbol} at ₹${params.pricePerUnit} each`;
         } else if (params.isTransfer) {
-          message = `Transferred ₹${params.amount} from ${params.fromAccountName} to ${params.toAccountName}`;
+          // Get account names for the success message
+          const fromAccountName =
+            userAccounts.find((acc) => acc.accountId === params.fromAccountId)
+              ?.accountName || params.fromAccountId;
+          const toAccountName =
+            userAccounts.find((acc) => acc.accountId === params.toAccountId)
+              ?.accountName || params.toAccountId;
+          message = `Transferred ₹${params.amount} from ${fromAccountName} to ${toAccountName}`;
         } else {
-          message = `Created ${params.transactionType.toLowerCase()} transaction: ₹${params.amount} ${params.transactionType === "DEBIT" ? "to" : "from"} ${params.customName}`;
+          const accountName =
+            userAccounts.find((acc) => acc.accountId === accountId)
+              ?.accountName || accountId;
+          message = `Created ${params.transactionType.toLowerCase()} transaction in ${accountName}: ₹${params.amount} ${params.transactionType === "DEBIT" ? "to" : "from"} ${params.customName}`;
         }
 
         return {
           success: true,
           transactionId: transaction.transactionId,
+          transactionDateTime: transaction.transactionDateTime,
           message,
           amount: params.amount,
         };

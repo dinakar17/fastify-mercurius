@@ -10,7 +10,7 @@ const END_OF_MONTH_MINUTES = 59;
 const END_OF_MONTH_SECONDS = 59;
 const END_OF_MONTH_MILLISECONDS = 999;
 
-// Helper to calculate status based on nextDueDate and other fields
+// Helper to calculate status based on nextDueDate and lastGeneratedDate
 const calculateStatus = (
   pattern: typeof recurringPatterns.$inferSelect
 ): "UPCOMING" | "OVERDUE" | "PAID" => {
@@ -113,7 +113,7 @@ export const recurringQueries: Pick<
       conditions.push(eq(recurringPatterns.isActive, isActive));
     }
 
-    // Fetch all patterns (we'll filter by status in memory for now)
+    // Fetch all patterns
     const result = await db
       .select()
       .from(recurringPatterns)

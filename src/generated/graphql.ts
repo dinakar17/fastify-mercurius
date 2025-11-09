@@ -98,6 +98,7 @@ export type CreateRecurringPatternInput = {
   accountId: Scalars['ID']['input'];
   amount: Scalars['String']['input'];
   categoryNumber: Scalars['Int']['input'];
+  customFrequencyDays?: InputMaybe<Scalars['Int']['input']>;
   customName?: InputMaybe<Scalars['String']['input']>;
   description?: InputMaybe<Scalars['String']['input']>;
   endDate?: InputMaybe<Scalars['String']['input']>;
@@ -114,6 +115,7 @@ export type CreateTransactionInput = {
   amount: Scalars['String']['input'];
   assetSymbol?: InputMaybe<Scalars['String']['input']>;
   categoryNumber: Scalars['Int']['input'];
+  customFrequencyDays?: InputMaybe<Scalars['Int']['input']>;
   customName?: InputMaybe<Scalars['String']['input']>;
   description?: InputMaybe<Scalars['String']['input']>;
   investmentAction?: InputMaybe<InvestmentAction>;
@@ -126,7 +128,6 @@ export type CreateTransactionInput = {
   pricePerUnit?: InputMaybe<Scalars['String']['input']>;
   quantity?: InputMaybe<Scalars['String']['input']>;
   recurringFrequency?: InputMaybe<RecurringFrequency>;
-  recurringPatternName?: InputMaybe<Scalars['String']['input']>;
   transactionDateTime: Scalars['String']['input'];
   transactionType: TransactionType;
 };
@@ -164,11 +165,11 @@ export type GetRecurringPatternsInput = {
 };
 
 export type GetTotalsInput = {
-  endDate: Scalars['String']['input'];
+  endDate?: InputMaybe<Scalars['String']['input']>;
   filters?: InputMaybe<TotalsFilterInput>;
   groupBy?: InputMaybe<GroupByDimension>;
   limit?: InputMaybe<Scalars['Int']['input']>;
-  startDate: Scalars['String']['input'];
+  startDate?: InputMaybe<Scalars['String']['input']>;
   timeBucket?: InputMaybe<TimeBucket>;
 };
 
@@ -278,10 +279,8 @@ export type MutationDeleteTransactionArgs = {
 
 
 export type MutationManageRecurringPatternArgs = {
-  action: Scalars['String']['input'];
-  input?: InputMaybe<CreateRecurringPatternInput>;
-  patternId?: InputMaybe<Scalars['ID']['input']>;
-  updateInput?: InputMaybe<UpdateRecurringPatternInput>;
+  patternId: Scalars['ID']['input'];
+  updateInput: UpdateRecurringPatternInput;
 };
 
 
@@ -374,6 +373,7 @@ export type QueryGetRecurringPatternArgs = {
 };
 
 export type RecurringFrequency =
+  | 'CUSTOM'
   | 'DAILY'
   | 'MONTHLY'
   | 'WEEKLY'
@@ -387,6 +387,7 @@ export type RecurringPattern = {
   category: Category;
   categoryId: Scalars['ID']['output'];
   createdAt: Scalars['String']['output'];
+  customFrequencyDays?: Maybe<Scalars['Int']['output']>;
   customName?: Maybe<CustomTransactionName>;
   customNameId?: Maybe<Scalars['ID']['output']>;
   description?: Maybe<Scalars['String']['output']>;
@@ -507,8 +508,7 @@ export type Transaction = {
   paymentMethod?: Maybe<Scalars['String']['output']>;
   pricePerUnit?: Maybe<Scalars['String']['output']>;
   quantity?: Maybe<Scalars['String']['output']>;
-  recurringFrequency?: Maybe<RecurringFrequency>;
-  recurringPatternName?: Maybe<Scalars['String']['output']>;
+  recurringPatternId?: Maybe<Scalars['ID']['output']>;
   transactionDateTime: Scalars['String']['output'];
   transactionId: Scalars['ID']['output'];
   transactionType: TransactionType;
@@ -518,6 +518,7 @@ export type Transaction = {
 export type TransactionConnection = {
   __typename?: 'TransactionConnection';
   pageInfo: PageInfo;
+  totals: TransactionTotals;
   transactions: Array<Transaction>;
 };
 
@@ -533,6 +534,14 @@ export type TransactionOrderType =
   | 'low_to_high'
   | 'new_to_old'
   | 'old_to_new';
+
+export type TransactionTotals = {
+  __typename?: 'TransactionTotals';
+  netAmount: Scalars['String']['output'];
+  totalCount: Scalars['Int']['output'];
+  totalCreditAmount: Scalars['String']['output'];
+  totalDebitAmount: Scalars['String']['output'];
+};
 
 export type TransactionType =
   | 'CREDIT'
@@ -551,13 +560,16 @@ export type UpdateAccountInput = {
 export type UpdateRecurringPatternInput = {
   amount?: InputMaybe<Scalars['String']['input']>;
   categoryNumber?: InputMaybe<Scalars['Int']['input']>;
+  customFrequencyDays?: InputMaybe<Scalars['Int']['input']>;
   customName?: InputMaybe<Scalars['String']['input']>;
   description?: InputMaybe<Scalars['String']['input']>;
   endDate?: InputMaybe<Scalars['String']['input']>;
   frequency?: InputMaybe<RecurringFrequency>;
   isActive?: InputMaybe<Scalars['Boolean']['input']>;
   isPaused?: InputMaybe<Scalars['Boolean']['input']>;
+  lastGeneratedDate?: InputMaybe<Scalars['String']['input']>;
   location?: InputMaybe<Scalars['String']['input']>;
+  nextDueDate?: InputMaybe<Scalars['String']['input']>;
   notes?: InputMaybe<Scalars['String']['input']>;
   paymentMethod?: InputMaybe<Scalars['String']['input']>;
   startDate?: InputMaybe<Scalars['String']['input']>;
@@ -565,9 +577,11 @@ export type UpdateRecurringPatternInput = {
 };
 
 export type UpdateTransactionInput = {
+  accountId?: InputMaybe<Scalars['ID']['input']>;
   amount?: InputMaybe<Scalars['String']['input']>;
   assetSymbol?: InputMaybe<Scalars['String']['input']>;
   categoryNumber?: InputMaybe<Scalars['Int']['input']>;
+  customFrequencyDays?: InputMaybe<Scalars['Int']['input']>;
   customName?: InputMaybe<Scalars['String']['input']>;
   customNameLogoUrl?: InputMaybe<Scalars['String']['input']>;
   description?: InputMaybe<Scalars['String']['input']>;
@@ -575,11 +589,11 @@ export type UpdateTransactionInput = {
   isInvestment?: InputMaybe<Scalars['Boolean']['input']>;
   isRecurring?: InputMaybe<Scalars['Boolean']['input']>;
   location?: InputMaybe<Scalars['String']['input']>;
+  otherAccountId?: InputMaybe<Scalars['ID']['input']>;
   paymentMethod?: InputMaybe<Scalars['String']['input']>;
   pricePerUnit?: InputMaybe<Scalars['String']['input']>;
   quantity?: InputMaybe<Scalars['String']['input']>;
   recurringFrequency?: InputMaybe<RecurringFrequency>;
-  recurringPatternName?: InputMaybe<Scalars['String']['input']>;
   transactionDateTime?: InputMaybe<Scalars['String']['input']>;
   transactionType?: InputMaybe<TransactionType>;
 };
@@ -700,6 +714,7 @@ export type ResolversTypes = ResolversObject<{
   TransactionConnection: ResolverTypeWrapper<TransactionConnection>;
   TransactionFilterType: TransactionFilterType;
   TransactionOrderType: TransactionOrderType;
+  TransactionTotals: ResolverTypeWrapper<TransactionTotals>;
   TransactionType: TransactionType;
   UpdateAccountInput: UpdateAccountInput;
   UpdateRecurringPatternInput: UpdateRecurringPatternInput;
@@ -740,6 +755,7 @@ export type ResolversParentTypes = ResolversObject<{
   TotalsFilterInput: TotalsFilterInput;
   Transaction: Transaction;
   TransactionConnection: TransactionConnection;
+  TransactionTotals: TransactionTotals;
   UpdateAccountInput: UpdateAccountInput;
   UpdateRecurringPatternInput: UpdateRecurringPatternInput;
   UpdateTransactionInput: UpdateTransactionInput;
@@ -835,7 +851,7 @@ export type MutationResolvers<ContextType = MercuriusContext, ParentType extends
   createTransaction?: Resolver<ResolversTypes['Transaction'], ParentType, ContextType, RequireFields<MutationCreateTransactionArgs, 'input'>>;
   deleteAccount?: Resolver<ResolversTypes['DeleteResponse'], ParentType, ContextType, RequireFields<MutationDeleteAccountArgs, 'accountId'>>;
   deleteTransaction?: Resolver<ResolversTypes['DeleteResponse'], ParentType, ContextType, RequireFields<MutationDeleteTransactionArgs, 'transactionId'>>;
-  manageRecurringPattern?: Resolver<Maybe<ResolversTypes['RecurringPattern']>, ParentType, ContextType, RequireFields<MutationManageRecurringPatternArgs, 'action'>>;
+  manageRecurringPattern?: Resolver<Maybe<ResolversTypes['RecurringPattern']>, ParentType, ContextType, RequireFields<MutationManageRecurringPatternArgs, 'patternId' | 'updateInput'>>;
   updateAccount?: Resolver<ResolversTypes['Account'], ParentType, ContextType, RequireFields<MutationUpdateAccountArgs, 'accountId' | 'input'>>;
   updateTransaction?: Resolver<ResolversTypes['Transaction'], ParentType, ContextType, RequireFields<MutationUpdateTransactionArgs, 'input' | 'transactionId'>>;
 }>;
@@ -875,6 +891,7 @@ export type RecurringPatternResolvers<ContextType = MercuriusContext, ParentType
   category?: Resolver<ResolversTypes['Category'], ParentType, ContextType>;
   categoryId?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   createdAt?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  customFrequencyDays?: Resolver<Maybe<ResolversTypes['Int']>, ParentType, ContextType>;
   customName?: Resolver<Maybe<ResolversTypes['CustomTransactionName']>, ParentType, ContextType>;
   customNameId?: Resolver<Maybe<ResolversTypes['ID']>, ParentType, ContextType>;
   description?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
@@ -969,8 +986,7 @@ export type TransactionResolvers<ContextType = MercuriusContext, ParentType exte
   paymentMethod?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   pricePerUnit?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   quantity?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
-  recurringFrequency?: Resolver<Maybe<ResolversTypes['RecurringFrequency']>, ParentType, ContextType>;
-  recurringPatternName?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  recurringPatternId?: Resolver<Maybe<ResolversTypes['ID']>, ParentType, ContextType>;
   transactionDateTime?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   transactionId?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   transactionType?: Resolver<ResolversTypes['TransactionType'], ParentType, ContextType>;
@@ -979,7 +995,15 @@ export type TransactionResolvers<ContextType = MercuriusContext, ParentType exte
 
 export type TransactionConnectionResolvers<ContextType = MercuriusContext, ParentType extends ResolversParentTypes['TransactionConnection'] = ResolversParentTypes['TransactionConnection']> = ResolversObject<{
   pageInfo?: Resolver<ResolversTypes['PageInfo'], ParentType, ContextType>;
+  totals?: Resolver<ResolversTypes['TransactionTotals'], ParentType, ContextType>;
   transactions?: Resolver<Array<ResolversTypes['Transaction']>, ParentType, ContextType>;
+}>;
+
+export type TransactionTotalsResolvers<ContextType = MercuriusContext, ParentType extends ResolversParentTypes['TransactionTotals'] = ResolversParentTypes['TransactionTotals']> = ResolversObject<{
+  netAmount?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  totalCount?: Resolver<ResolversTypes['Int'], ParentType, ContextType>;
+  totalCreditAmount?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  totalDebitAmount?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
 }>;
 
 export type Resolvers<ContextType = MercuriusContext> = ResolversObject<{
@@ -1002,5 +1026,6 @@ export type Resolvers<ContextType = MercuriusContext> = ResolversObject<{
   TotalsFilter?: TotalsFilterResolvers<ContextType>;
   Transaction?: TransactionResolvers<ContextType>;
   TransactionConnection?: TransactionConnectionResolvers<ContextType>;
+  TransactionTotals?: TransactionTotalsResolvers<ContextType>;
 }>;
 

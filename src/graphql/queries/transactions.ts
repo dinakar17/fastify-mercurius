@@ -66,8 +66,7 @@ export const formatTransactionForGraphQL = (
 
   // Recurring fields
   isRecurring: transaction.isRecurring,
-  recurringFrequency: transaction.recurringFrequency,
-  recurringPatternName: transaction.recurringPatternName,
+  recurringPatternId: transaction.recurringPatternId,
 
   // Transfer fields
   isTransfer: transaction.isTransfer,
@@ -321,16 +320,6 @@ const applyAdditionalFilters = (
     );
   }
 
-  // Recurring-specific filters
-  if (options.recurringFrequency) {
-    conditions.push(
-      eq(
-        transactions.recurringFrequency,
-        options.recurringFrequency as "DAILY" | "WEEKLY" | "MONTHLY" | "YEARLY"
-      )
-    );
-  }
-
   // Additional filters
   if (options.location) {
     conditions.push(ilike(transactions.location, `%${options.location}%`));
@@ -493,8 +482,29 @@ export const transactionQueries: Pick<
       MAX_TRANSACTION_LIMIT
     );
 
+    // Single optimized query that gets both paginated results AND totals using window functions
+    // This avoids making two separate queries
     const result = await db
-      .select()
+      .select({
+        // Transaction data
+        transaction: transactions,
+        accountName: accounts.accountName,
+        accountNumber: accounts.accountNumber,
+        accountLogoUrl: accounts.logoUrl,
+        categoryId: categories.categoryId,
+        categoryName: categories.categoryName,
+        categoryNumber: categories.categoryNumber,
+        categoryType: categories.categoryType,
+        investmentSector: categories.investmentSector,
+        categoryIconUrl: categories.defaultIconUrl,
+        customNameId: customTransactionNames.customNameId,
+        customName: customTransactionNames.customName,
+        customLogoUrl: customTransactionNames.customLogoUrl,
+        // Totals using window functions (calculated once for all rows)
+        totalCount: sql<number>`COUNT(*) OVER()::int`,
+        totalCreditAmount: sql<string>`SUM(CASE WHEN ${transactions.transactionType} = 'CREDIT' THEN ${transactions.amount}::numeric ELSE 0 END) OVER()::text`,
+        totalDebitAmount: sql<string>`SUM(CASE WHEN ${transactions.transactionType} = 'DEBIT' THEN ${transactions.amount}::numeric ELSE 0 END) OVER()::text`,
+      })
       .from(transactions)
       .leftJoin(accounts, eq(transactions.accountId, accounts.accountId))
       .leftJoin(categories, eq(transactions.categoryId, categories.categoryId))
@@ -510,34 +520,55 @@ export const transactionQueries: Pick<
     const hasNextPage = result.length > pageSize;
     const transactionsData = hasNextPage ? result.slice(0, pageSize) : result;
 
+    // Extract totals from first row (window functions return same value for all rows)
+    const totals = result[0]
+      ? {
+          totalCount: result[0].totalCount,
+          totalCreditAmount: result[0].totalCreditAmount,
+          totalDebitAmount: result[0].totalDebitAmount,
+        }
+      : { totalCount: 0, totalCreditAmount: "0", totalDebitAmount: "0" };
+
     const formattedTransactions = transactionsData.map((row) =>
-      formatTransactionForGraphQL(row.transactions, {
-        accountName: row.accounts?.accountName ?? null,
-        accountNumber: row.accounts?.accountNumber ?? null,
-        accountLogoUrl: row.accounts?.logoUrl ?? null,
-        categoryId: row.categories?.categoryId ?? null,
-        categoryName: row.categories?.categoryName ?? null,
-        categoryNumber: row.categories?.categoryNumber ?? null,
-        categoryType: row.categories?.categoryType ?? null,
-        investmentSector: row.categories?.investmentSector ?? null,
-        categoryIconUrl: row.categories?.defaultIconUrl ?? null,
-        customNameId: row.custom_transaction_names?.customNameId ?? null,
-        customName: row.custom_transaction_names?.customName ?? null,
-        customLogoUrl: row.custom_transaction_names?.customLogoUrl ?? null,
+      formatTransactionForGraphQL(row.transaction, {
+        accountName: row.accountName ?? null,
+        accountNumber: row.accountNumber ?? null,
+        accountLogoUrl: row.accountLogoUrl ?? null,
+        categoryId: row.categoryId ?? null,
+        categoryName: row.categoryName ?? null,
+        categoryNumber: row.categoryNumber ?? null,
+        categoryType: row.categoryType ?? null,
+        investmentSector: row.investmentSector ?? null,
+        categoryIconUrl: row.categoryIconUrl ?? null,
+        customNameId: row.customNameId ?? null,
+        customName: row.customName ?? null,
+        customLogoUrl: row.customLogoUrl ?? null,
       })
     );
 
     // Get the last transaction's ID as the cursor
     const endCursor =
       transactionsData.length > 0
-        ? (transactionsData.at(-1)?.transactions.transactionId ?? null)
+        ? (transactionsData.at(-1)?.transaction.transactionId ?? null)
         : null;
+
+    const totalCreditAmount = Number.parseFloat(
+      totals.totalCreditAmount || "0"
+    );
+    const totalDebitAmount = Number.parseFloat(totals.totalDebitAmount || "0");
+    const netAmount = totalCreditAmount - totalDebitAmount;
 
     return {
       transactions: formattedTransactions as unknown as Transaction[],
       pageInfo: {
         hasNextPage,
         endCursor,
+      },
+      totals: {
+        totalCount: totals.totalCount || 0,
+        totalCreditAmount: totals.totalCreditAmount || "0",
+        totalDebitAmount: totals.totalDebitAmount || "0",
+        netAmount: netAmount.toFixed(2),
       },
     };
   },

@@ -1,4 +1,4 @@
-import { openai } from "@ai-sdk/openai";
+import { anthropic } from "@ai-sdk/anthropic";
 import type { UIMessage } from "ai";
 import { convertToModelMessages, streamText } from "ai";
 import type { FastifyPluginAsync } from "fastify";
@@ -33,17 +33,20 @@ const aiRoute: FastifyPluginAsync = async (fastify) => {
     };
 
     const result = streamText({
-      model: openai(model),
+      model: anthropic("claude-sonnet-4-5-20250929"),
       system: CREATE_TRANSACTION_PROMPT,
       messages: convertToModelMessages(messages),
       tools: dynamicTools,
     });
 
-    // Mark the response as a v1 data stream
-    reply.header("X-Vercel-AI-Data-Stream", "v1");
-    reply.header("Content-Type", "text/plain; charset=utf-8");
-
-    return reply.send(result.toUIMessageStreamResponse());
+    return reply.send(
+      result.toUIMessageStreamResponse({
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "Content-Encoding": "none",
+        },
+      })
+    );
   });
 };
 

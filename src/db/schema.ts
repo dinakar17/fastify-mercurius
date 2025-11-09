@@ -64,6 +64,7 @@ export const recurringFrequencyEnum = pgEnum("recurring_frequency", [
   "WEEKLY",
   "MONTHLY",
   "YEARLY",
+  "CUSTOM",
 ]);
 
 // ===========================
@@ -178,6 +179,7 @@ export const categories = pgTable(
     investmentSector: varchar("investment_sector", { length: 100 }),
     description: text("description"),
     defaultIconUrl: varchar("default_icon_url", { length: 500 }),
+    // Todo: Remove this later
     displayOrder: integer("display_order"),
     isSystemCategory: boolean("is_system_category").default(true).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true })
@@ -423,6 +425,7 @@ export const recurringPatterns = pgTable(
 
     // Scheduling
     frequency: recurringFrequencyEnum("frequency").notNull(),
+    customFrequencyDays: integer("custom_frequency_days"), // Only used when frequency = 'CUSTOM'
     startDate: timestamp("start_date", { withTimezone: true }).notNull(),
     endDate: timestamp("end_date", { withTimezone: true }), // NULL = indefinite
     nextDueDate: timestamp("next_due_date", { withTimezone: true }).notNull(),
@@ -541,12 +544,7 @@ export const transactions = pgTable(
 
     // Recurring Pattern
     isRecurring: boolean("is_recurring").default(false).notNull(),
-    recurringFrequency: recurringFrequencyEnum("recurring_frequency"),
-    recurringPatternName: varchar("recurring_pattern_name", { length: 255 }),
     recurringPatternId: uuid("recurring_pattern_id"), // Links to recurring_patterns table
-    isRecurringGenerated: boolean("is_recurring_generated")
-      .default(false)
-      .notNull(), // Auto-created vs manual
 
     // Transfer Related
     isTransfer: boolean("is_transfer").default(false).notNull(),
@@ -590,6 +588,13 @@ export const transactions = pgTable(
     ),
     index("transactions_custom_name_idx").on(table.customNameId, table.userId),
     index("transactions_type_idx").on(table.transactionType, table.userId),
+    // Index for linked transactions (optimizes transfer queries)
+    index("transactions_linked_transaction_idx").on(table.linkedTransactionId),
+    // Composite index for transfer + account lookups
+    index("transactions_transfer_account_idx").on(
+      table.isTransfer,
+      table.accountId
+    ),
 
     // Foreign key to Supabase auth.users
     foreignKey({

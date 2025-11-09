@@ -45,6 +45,7 @@ enum RecurringFrequency {
   WEEKLY
   MONTHLY
   YEARLY
+  CUSTOM
 }
 
 enum TransactionFilterType {
@@ -149,8 +150,7 @@ type Transaction {
   
   # Recurring fields
   isRecurring: Boolean!
-  recurringFrequency: RecurringFrequency
-  recurringPatternName: String
+  recurringPatternId: ID
   
   # Transfer fields
   isTransfer: Boolean!
@@ -200,6 +200,7 @@ type RecurringPattern {
   
   # Scheduling
   frequency: RecurringFrequency!
+  customFrequencyDays: Int
   startDate: String!
   endDate: String # null = indefinite
   nextDueDate: String!
@@ -300,7 +301,7 @@ input CreateTransactionInput {
   # Recurring Related
   isRecurring: Boolean
   recurringFrequency: RecurringFrequency
-  recurringPatternName: String
+  customFrequencyDays: Int
   
   # Other Optional Settings
   location: String
@@ -317,6 +318,7 @@ input UpdateTransactionInput {
   location: String
   paymentMethod: String
   transactionType: TransactionType
+  accountId: ID
   
   # Investment Related
   isInvestment: Boolean
@@ -325,10 +327,13 @@ input UpdateTransactionInput {
   quantity: String
   investmentAction: InvestmentAction
   
+  # Transfer Related
+  otherAccountId: ID
+  
   # Recurring Related
   isRecurring: Boolean
   recurringFrequency: RecurringFrequency
-  recurringPatternName: String
+  customFrequencyDays: Int
 }
 
 input CreateRecurringPatternInput {
@@ -345,6 +350,7 @@ input CreateRecurringPatternInput {
   
   # Scheduling
   frequency: RecurringFrequency!
+  customFrequencyDays: Int
   startDate: String! # ISO 8601 date string
   endDate: String # ISO 8601 date string, null = indefinite
   
@@ -363,8 +369,11 @@ input UpdateRecurringPatternInput {
   
   # Scheduling
   frequency: RecurringFrequency
+  customFrequencyDays: Int
   startDate: String
   endDate: String
+  nextDueDate: String
+  lastGeneratedDate: String
   
   # State changes
   isActive: Boolean
@@ -432,11 +441,19 @@ input GetTransactionsInput {
 type TransactionConnection {
   transactions: [Transaction!]!
   pageInfo: PageInfo!
+  totals: TransactionTotals!
 }
 
 type PageInfo {
   hasNextPage: Boolean!
   endCursor: String
+}
+
+type TransactionTotals {
+  totalCount: Int!
+  totalCreditAmount: String!
+  totalDebitAmount: String!
+  netAmount: String!
 }
 
 type DeleteResponse {
@@ -544,8 +561,8 @@ type TotalsFilter {
 }
 
 input GetTotalsInput {
-  startDate: String! # ISO 8601 date string
-  endDate: String! # ISO 8601 date string
+  startDate: String # ISO 8601 date string (optional, defaults to beginning of time)
+  endDate: String # ISO 8601 date string (optional, defaults to now)
   filters: TotalsFilterInput
   groupBy: GroupByDimension # How to group the results (account, category, etc.)
   timeBucket: TimeBucket # How to bucket by time (none or month)
@@ -640,9 +657,7 @@ type Mutation {
   
   # Recurring pattern mutations
   manageRecurringPattern(
-    patternId: ID # Required for update/delete/pause, omit for create
-    action: String! # "create", "update", "delete", "pause", "resume"
-    input: CreateRecurringPatternInput # Required for create
-    updateInput: UpdateRecurringPatternInput # Required for update
+    patternId: ID!
+    updateInput: UpdateRecurringPatternInput!
   ): RecurringPattern
 }
