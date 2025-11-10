@@ -1,11 +1,12 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import type { UIMessage } from "ai";
-import { convertToModelMessages, streamText } from "ai";
+import { convertToModelMessages, stepCountIs, streamText } from "ai";
 import type { FastifyPluginAsync } from "fastify";
 import { CREATE_TRANSACTION_PROMPT } from "./prompts";
 import { createTransactionTool } from "./tools";
 
 const HTTP_UNAUTHORIZED = 401;
+const MAX_AI_STEPS = 20;
 
 const aiRoute: FastifyPluginAsync = async (fastify) => {
   await fastify.post<{
@@ -35,6 +36,7 @@ const aiRoute: FastifyPluginAsync = async (fastify) => {
       system: CREATE_TRANSACTION_PROMPT,
       messages: convertToModelMessages(messages),
       tools: dynamicTools,
+      stopWhen: stepCountIs(MAX_AI_STEPS),
       providerOptions: {
         anthropic: {
           disableParallelToolUse: true,
