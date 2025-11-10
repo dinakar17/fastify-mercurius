@@ -11,9 +11,7 @@ const aiRoute: FastifyPluginAsync = async (fastify) => {
   await fastify.post<{
     Body: { messages: UIMessage[]; model?: string };
   }>("/stream", async (request, reply) => {
-    const { messages, model = "gpt-4o" } = request.body;
-
-    console.log("AI Stream Request:", { messages, model });
+    const { messages } = request.body;
 
     // Get user from request
     const user = request.user;
@@ -37,6 +35,11 @@ const aiRoute: FastifyPluginAsync = async (fastify) => {
       system: CREATE_TRANSACTION_PROMPT,
       messages: convertToModelMessages(messages),
       tools: dynamicTools,
+      providerOptions: {
+        anthropic: {
+          disableParallelToolUse: true,
+        },
+      },
     });
 
     return reply.send(
