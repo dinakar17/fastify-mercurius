@@ -9,7 +9,11 @@ import type {
 } from "../../generated/graphql";
 import { aggregateTotals } from "../totals-helpers";
 
-// Constants for end-of-day time
+// Constants for start and end of day time
+const START_OF_DAY_HOURS = 0;
+const START_OF_DAY_MINUTES = 0;
+const START_OF_DAY_SECONDS = 0;
+const START_OF_DAY_MILLISECONDS = 0;
 const END_OF_DAY_HOURS = 23;
 const END_OF_DAY_MINUTES = 59;
 const END_OF_DAY_SECONDS = 59;
@@ -80,6 +84,14 @@ export const insightQueries: Pick<QueryResolvers, "getMyTotals"> = {
     // Parse dates - default to "all time" if not provided
     const start = startDate ? new Date(startDate) : new Date(0); // Beginning of time
     const end = endDate ? new Date(endDate) : new Date(); // Now
+
+    // Make startDate inclusive by setting time to start of day
+    start.setHours(
+      START_OF_DAY_HOURS,
+      START_OF_DAY_MINUTES,
+      START_OF_DAY_SECONDS,
+      START_OF_DAY_MILLISECONDS
+    );
 
     // Make endDate inclusive by setting time to end of day
     end.setHours(

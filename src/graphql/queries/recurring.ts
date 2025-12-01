@@ -251,6 +251,7 @@ export const recurringQueries: Pick<
       END_OF_MONTH_MILLISECONDS
     );
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    today.setHours(0, 0, 0, 0);
 
     // Fetch all active recurring patterns for the user
     const result = await db
@@ -258,68 +259,97 @@ export const recurringQueries: Pick<
       .from(recurringPatterns)
       .where(
         and(
-          eq(recurringPatterns.userId, user.id),
+          // eq(recurringPatterns.userId, user.id),
           eq(recurringPatterns.isActive, true)
         )
       )
       .orderBy(desc(recurringPatterns.nextDueDate));
 
-    // Filter patterns where nextDueDate falls within the month
-    const allPatternsInMonth = result.filter(
-      (pattern: typeof recurringPatterns.$inferSelect) => {
-        const nextDue = new Date(pattern.nextDueDate);
-        return nextDue >= startOfMonth && nextDue <= endOfMonth;
-      }
-    );
-
     // Initialize counters
-    let paid = 0;
-    let overdue = 0;
-    let dueToday = 0;
-    let upcoming = 0;
+    let paidCount = 0;
+    let overdueCount = 0;
+    let dueTodayCount = 0;
+    let upcomingCount = 0;
 
-    // Filter patterns to exclude already paid ones, but include overdue
-    const patternsToReturn = allPatternsInMonth.filter(
-      (pattern: typeof recurringPatterns.$inferSelect) => {
-        const status = calculateStatus(pattern);
-        const nextDue = new Date(pattern.nextDueDate);
-        const isDueToday =
-          nextDue.getFullYear() === today.getFullYear() &&
-          nextDue.getMonth() === today.getMonth() &&
-          nextDue.getDate() === today.getDate();
+    // Collections for each category
+    const paidPatterns: (typeof recurringPatterns.$inferSelect)[] = [];
+    const overduePatterns: (typeof recurringPatterns.$inferSelect)[] = [];
+    const dueTodayPatterns: (typeof recurringPatterns.$inferSelect)[] = [];
+    const upcomingPatterns: (typeof recurringPatterns.$inferSelect)[] = [];
 
-        // Count for statistics
-        if (status === "PAID") {
-          paid += 1;
-          return false; // Exclude from returned patterns
+    // Categorize patterns based on new logic
+    for (const pattern of result) {
+      const nextDue = new Date(pattern.nextDueDate);
+      nextDue.setHours(0, 0, 0, 0);
+
+      const lastGenerated = pattern.lastGeneratedDate
+        ? new Date(pattern.lastGeneratedDate)
+        : null;
+
+      const isDaily = pattern.frequency === "DAILY";
+
+      // 1. Paid: lastGeneratedDate falls in the current month
+      if (
+        lastGenerated &&
+        lastGenerated >= startOfMonth &&
+        lastGenerated <= endOfMonth
+      ) {
+        paidCount += 1;
+        paidPatterns.push(pattern);
+        // For daily patterns, also include them in other categories if applicable
+        if (!isDaily) {
+          continue; // Skip to next pattern for non-daily
         }
-        if (status === "OVERDUE") {
-          overdue += 1;
-          return true; // Include overdue patterns
-        }
-        if (isDueToday) {
-          dueToday += 1;
-          return true; // Include patterns due today
-        }
-        // status === "UPCOMING"
-        upcoming += 1;
-        return true; // Include upcoming patterns
       }
-    );
+
+      // 2. Overdue: nextDueDate is less than today (regardless of month)
+      if (nextDue < today) {
+        overdueCount += 1;
+        overduePatterns.push(pattern);
+        if (!isDaily) {
+          continue;
+        }
+      }
+
+      // 3. Due Today: nextDueDate equals today
+      if (nextDue.getTime() === today.getTime()) {
+        dueTodayCount += 1;
+        dueTodayPatterns.push(pattern);
+        if (!isDaily) {
+          continue;
+        }
+      }
+
+      // 4. Upcoming: nextDueDate is in current month and greater than today
+      if (nextDue > today && nextDue >= startOfMonth && nextDue <= endOfMonth) {
+        upcomingCount += 1;
+        upcomingPatterns.push(pattern);
+      }
+    }
+
+    // Combine patterns to return (exclude paid patterns)
+    const patternsToReturn = [
+      ...overduePatterns,
+      ...dueTodayPatterns,
+      ...upcomingPatterns,
+    ];
 
     // Format patterns for GraphQL
     const formattedPatterns = patternsToReturn.map(
       formatRecurringPatternForGraphQL
     );
 
+    // Total count includes all categories
+    const totalCount = paidCount + overdueCount + dueTodayCount + upcomingCount;
+
     return {
       patterns: formattedPatterns as never,
       summary: {
-        paid,
-        overdue,
-        dueToday,
-        upcoming,
-        total: allPatternsInMonth.length,
+        paid: paidCount,
+        overdue: overdueCount,
+        dueToday: dueTodayCount,
+        upcoming: upcomingCount,
+        total: totalCount,
       },
     };
   },
