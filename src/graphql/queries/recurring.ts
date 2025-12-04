@@ -259,7 +259,7 @@ export const recurringQueries: Pick<
       .from(recurringPatterns)
       .where(
         and(
-          // eq(recurringPatterns.userId, user.id),
+          eq(recurringPatterns.userId, user.id),
           eq(recurringPatterns.isActive, true)
         )
       )
